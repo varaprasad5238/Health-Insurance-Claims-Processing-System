@@ -1,8 +1,11 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { Activity, ArrowLeft, CheckCircle, Loader2, CircleDashed, AlertTriangle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 type Span = {
   span_id: string;
@@ -39,16 +42,23 @@ const STAGES = [
   { order: 8, label: "Final decision" },
 ];
 
-export default function ClaimDetail({ params }: { params: { id: string } }) {
+export default function ClaimDetail() {
+  const params = useParams<{ id: string }>();
+  const claimId = typeof params?.id === "string" ? params.id : "";
   const [data, setData] = useState<ClaimData | null>(null);
   const [polling, setPolling] = useState(true);
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
 
+    if (!claimId || claimId === "undefined") {
+      setPolling(false);
+      return undefined;
+    }
+
     const fetchData = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/claims/${params.id}/status`);
+        const res = await fetch(`${API_BASE_URL}/api/claims/${encodeURIComponent(claimId)}/status`);
         if (res.ok) {
           const json: ClaimData = await res.json();
           setData(json);
@@ -72,7 +82,21 @@ export default function ClaimDetail({ params }: { params: { id: string } }) {
     }
 
     return () => clearTimeout(timeoutId);
-  }, [params.id, polling]);
+  }, [claimId, polling]);
+
+  if (!claimId || claimId === "undefined") {
+    return (
+      <main className="app-shell">
+        <div className="app-frame max-w-4xl">
+          <div className="glass-panel rounded-[24px] p-6">
+            <h1 className="text-xl font-black">Claim ID missing</h1>
+            <p className="mt-2 text-sm text-muted">Submit a claim first so the review page has a valid claim ID.</p>
+            <Link href="/submit" className="primary-button mt-4 w-fit">Submit Claim</Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   if (!data) {
     return (

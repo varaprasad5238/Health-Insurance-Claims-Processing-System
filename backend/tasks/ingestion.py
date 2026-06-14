@@ -1,0 +1,222 @@
+import asyncio
+import json
+from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
+
+from backend.agents.decision import DecisionSynthesisAgent
+from backend.agents.entity import EntityExtractionAgent
+from backend.agents.gating import GatingAgent
+from backend.agents.orchestrator import OrchestratorAgent
+from backend.agents.reconciler import AmountReconcilerAgent
+from backend.agents.vision_reader import VisionReaderAgent
+from backend.ai_platform.schemas import DocumentVisionOutput
+from backend.database.connection import AsyncSessionLocal
+from backend.database.models import ClaimDecisionModel
+from backend.logging_config import get_logger
+from backend.policy.engine import PolicyDecisionResult, PolicyEngine
+from backend.tracing.store import TraceStore
+
+logger = get_logger(__name__)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def money(value: Decimal) -> str:
+    return str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+async def complete_stage(
+    claim_id: str,
+    agent_name: str,
+    *,
+    stage_order: int,
+    input_summary: dict[str, Any],
+    output_summary: dict[str, Any],
+    model_used: str = "none",
+    confidence_delta: float | None = None,
+    delay_seconds: float = 0.25,
+) -> None:
+    span_id = await TraceStore.start_span(
+        claim_id,
+        agent_name,
+        stage_order=stage_order,
+        input_summary=input_summary,
+        model_used=model_used,
+        current_stage=agent_name,
+    )
+    await asyncio.sleep(delay_seconds)
+    await TraceStore.finish_span(
+        span_id,
+        status="SUCCESS",
+        output_summary=output_summary,
+        confidence_delta=confidence_delta,
+        current_stage=None,
+    )
+
+
+async def write_decision(
+    claim_id: str,
+    *,
+    policy_decision: PolicyDecisionResult,
+) -> None:
+    async with AsyncSessionLocal() as session:
+        existing = await session.get(ClaimDecisionModel, claim_id)
+        if existing:
+            await session.delete(existing)
+            await session.flush()
+
+        session.add(
+            ClaimDecisionModel(
+                claim_id=claim_id,
+                decision=policy_decision.decision,
+                approved_amount=policy_decision.approved_amount,
+                copay_deducted=policy_decision.copay_deducted,
+                network_discount_applied=policy_decision.network_discount_applied,
+                rejection_reasons=json.dumps(policy_decision.rejection_reasons, default=str),
+                partial_items=json.dumps([item.model_dump() for item in policy_decision.partial_items], default=str) if policy_decision.partial_items else None,
+                member_message=policy_decision.member_message,
+                ops_summary=policy_decision.ops_summary,
+                confidence_score=policy_decision.confidence_score,
+                manual_review_note=policy_decision.manual_review_note,
+                decided_at=utc_now_iso(),
+            )
+        )
+        await session.commit()
+
+
+async def run_claim_ingestion(
+    claim_id: str,
+    *,
+    member_id: str,
+    claim_category: str,
+    treatment_date: str,
+    claimed_amount: str,
+    documents: list[dict[str, Any]],
+) -> None:
+    logger.info("Starting claim ingestion: claim_id=%s member_id=%s category=%s documents=%s", claim_id, member_id, claim_category, len(documents))
+    amount = Decimal(claimed_amount)
+    copay_rate = Decimal("0.10") if claim_category == "CONSULTATION" else Decimal("0")
+    copay = amount * copay_rate
+    approved = amount - copay
+    confidence = 0.93 if documents else 0.70
+    vision_reader = VisionReaderAgent()
+    gating_agent = GatingAgent()
+    entity_agent = EntityExtractionAgent()
+    reconciler_agent = AmountReconcilerAgent()
+    orchestrator_agent = OrchestratorAgent()
+    policy_engine = PolicyEngine()
+    decision_agent = DecisionSynthesisAgent()
+    classified_documents: list[DocumentVisionOutput] = []
+
+    for index, document in enumerate(documents, start=1):
+        try:
+            classification = await vision_reader.classify_document(
+                claim_id=claim_id,
+                document_index=index,
+                document=document,
+                claim_category=claim_category,
+            )
+        except Exception:
+            logger.exception("Vision classification failed; routing claim to manual review: claim_id=%s", claim_id)
+            await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
+            return
+        classified_documents.append(classification)
+
+    gating_result = await gating_agent.run(
+        claim_id=claim_id,
+        claim_category=claim_category,
+        documents=classified_documents,
+    )
+    if not gating_result.passed:
+        logger.info("Claim stopped by document gating: claim_id=%s error_code=%s", claim_id, gating_result.error_code)
+        return
+    logger.info("Document gating passed: claim_id=%s documents=%s", claim_id, len(classified_documents))
+
+    try:
+        extraction = await entity_agent.extract(
+            claim_id=claim_id,
+            claim_category=claim_category,
+            documents=classified_documents,
+        )
+        if extraction.field_confidences:
+            confidence = round(sum(extraction.field_confidences.values()) / len(extraction.field_confidences), 3)
+    except Exception:
+        logger.exception("Entity extraction failed; routing claim to manual review: claim_id=%s", claim_id)
+        await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
+        return
+
+    try:
+        reconciliation = await reconciler_agent.reconcile(
+            claim_id=claim_id,
+            claimed_amount=claimed_amount,
+            extraction=extraction,
+        )
+        amount = Decimal(reconciliation.payable_basis_amount)
+        copay = amount * copay_rate
+        approved = amount - copay
+        if reconciliation.discrepancy_flags:
+            confidence = max(0.0, confidence - 0.08)
+    except Exception:
+        logger.exception("Amount reconciliation failed; routing claim to manual review: claim_id=%s", claim_id)
+        await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
+        return
+
+    try:
+        merged_claim = await orchestrator_agent.merge(
+            claim_id=claim_id,
+            extraction=extraction,
+            reconciliation=reconciliation,
+            failed_agents=[],
+        )
+        confidence = merged_claim.extraction_confidence
+        amount = Decimal(merged_claim.payable_basis_amount)
+        copay = amount * copay_rate
+        approved = amount - copay
+    except Exception:
+        logger.exception("Orchestration failed; routing claim to manual review: claim_id=%s", claim_id)
+        await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
+        return
+
+    if merged_claim.extraction_confidence < 0.65:
+        logger.info("Extraction confidence below threshold; routing to manual review: claim_id=%s confidence=%s", claim_id, merged_claim.extraction_confidence)
+        await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
+        return
+
+    try:
+        policy_decision = await policy_engine.evaluate(
+            claim_id=claim_id,
+            member_id=member_id,
+            claim_category=claim_category,
+            treatment_date=treatment_date,
+            merged_claim=merged_claim,
+        )
+    except Exception:
+        logger.exception("Policy evaluation failed; routing claim to manual review: claim_id=%s", claim_id)
+        await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
+        return
+
+    policy_decision = await decision_agent.synthesize(
+        claim_id=claim_id,
+        policy_decision=policy_decision,
+        merged_claim=merged_claim,
+    )
+
+    await write_decision(
+        claim_id,
+        policy_decision=policy_decision,
+    )
+
+    await complete_stage(
+        claim_id,
+        "final",
+        stage_order=8,
+        input_summary={"claim_id": claim_id},
+        output_summary={"decision": policy_decision.decision},
+        delay_seconds=0.08,
+    )
+    final_status = "MANUAL_REVIEW" if policy_decision.decision == "MANUAL_REVIEW" else "DECIDED"
+    await TraceStore.update_claim_state(claim_id, status=final_status, current_stage=None)
+    logger.info("Claim ingestion completed: claim_id=%s status=%s", claim_id, final_status)

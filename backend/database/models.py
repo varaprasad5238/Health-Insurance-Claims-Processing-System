@@ -19,9 +19,24 @@ class ClaimModel(Base):
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
-    spans = relationship("TraceSpanModel", back_populates="claim", order_by="TraceSpanModel.started_at")
-    decision = relationship("ClaimDecisionModel", back_populates="claim", uselist=False)
-    gating_error = relationship("GatingErrorModel", back_populates="claim", uselist=False)
+    spans = relationship(
+        "TraceSpanModel",
+        back_populates="claim",
+        order_by="TraceSpanModel.started_at",
+        cascade="all, delete-orphan",
+    )
+    decision = relationship(
+        "ClaimDecisionModel",
+        back_populates="claim",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    gating_error = relationship(
+        "GatingErrorModel",
+        back_populates="claim",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 class TraceSpanModel(Base):
     __tablename__ = "trace_spans"

@@ -75,7 +75,7 @@ class PolicyMember(BaseModel):
     date_of_birth: str
     gender: Optional[str] = None
     relationship: str
-    join_date: str
+    join_date: Optional[str] = None
     dependents: Optional[List[str]] = None
     primary_member_id: Optional[str] = None
 

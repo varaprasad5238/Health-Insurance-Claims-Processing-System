@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -10,6 +13,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const metrics = [
   { label: "Claims Ready", value: "12", note: "assignment cases mapped" },
@@ -24,13 +29,41 @@ const workflow = [
   { icon: ClipboardCheck, label: "Decision trace", text: "Shows what passed, failed, skipped, and why." },
 ];
 
-const queue = [
-  { id: "CLM-OPD-1042", member: "Rajesh Kumar", type: "Consultation", status: "Ready", tone: "success" },
-  { id: "CLM-OPD-1043", member: "Priya Singh", type: "Dental", status: "Partial", tone: "warning" },
-  { id: "CLM-OPD-1044", member: "Vikram Joshi", type: "Diabetes", status: "Rejected", tone: "danger" },
-];
+type ClaimSummary = {
+  claim_id: string;
+  member_id: string;
+  claim_category: string;
+  claimed_amount: string;
+  status: string;
+  updated_at: string;
+  decision: string | null;
+  approved_amount: string | null;
+  confidence_score: number | null;
+};
 
 export default function Home() {
+  const [claims, setClaims] = useState<ClaimSummary[]>([]);
+  const [loadingClaims, setLoadingClaims] = useState(true);
+
+  useEffect(() => {
+    const fetchClaims = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/claims/`);
+        if (!response.ok) {
+          setClaims([]);
+          return;
+        }
+        const payload = await response.json();
+        setClaims(payload.claims ?? []);
+      } catch {
+        setClaims([]);
+      } finally {
+        setLoadingClaims(false);
+      }
+    };
+    fetchClaims();
+  }, []);
+
   return (
     <main className="app-shell">
       <div className="app-frame space-y-5">
@@ -86,27 +119,41 @@ export default function Home() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-black">Claim Worklist</h3>
-                <p className="text-sm text-muted">Recent decision outcomes</p>
+                <p className="text-sm text-muted">Previous submitted claims</p>
               </div>
               <TriangleAlert className="h-5 w-5 text-[var(--accent)]" />
             </div>
             <div className="space-y-3">
-              {queue.map((claim) => (
-                <div key={claim.id} className="muted-panel rounded-2xl p-3">
+              {loadingClaims && <div className="muted-panel rounded-2xl p-3 text-sm text-muted">Loading claims...</div>}
+              {!loadingClaims && claims.length === 0 && (
+                <div className="muted-panel rounded-2xl p-3 text-sm text-muted">
+                  No claims submitted yet. Create one to see it here.
+                </div>
+              )}
+              {!loadingClaims && claims.slice(0, 6).map((claim) => (
+                <Link key={claim.claim_id} href={`/claims/${claim.claim_id}`} className="muted-panel block rounded-2xl p-3 transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-strong)]">
                   <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-black">{claim.id}</div>
-                      <div className="text-xs text-muted">{claim.member} · {claim.type}</div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-black">{claim.claim_id}</div>
+                      <div className="text-xs text-muted">{claim.member_id} · {claim.claim_category.replace("_", " ")} · ₹{claim.claimed_amount}</div>
                     </div>
-                    <span className={`status-pill ${claim.tone === "success" ? "text-[var(--success)]" : claim.tone === "warning" ? "text-[var(--warning)]" : "text-[var(--danger)]"}`}>
-                      {claim.status}
+                    <span className={`status-pill ${statusTone(claim.status)}`}>
+                      {claim.status.replace("_", " ")}
                     </span>
                   </div>
-                </div>
+                  {claim.decision && (
+                    <div className="mt-2 text-xs text-muted">
+                      {claim.decision} · Approved ₹{claim.approved_amount ?? "0"}
+                    </div>
+                  )}
+                </Link>
               ))}
             </div>
             <Link href="/submit" className="secondary-button mt-5 w-full">
-              Open Submit Flow
+              Submit New Claim
+            </Link>
+            <Link href="/claims" className="secondary-button mt-3 w-full">
+              View All Claims
             </Link>
           </aside>
         </section>
@@ -126,4 +173,11 @@ export default function Home() {
       </div>
     </main>
   );
+}
+
+function statusTone(status: string) {
+  if (status === "DECIDED") return "text-[var(--success)]";
+  if (status === "PROCESSING" || status === "PENDING") return "text-[var(--brand-strong)]";
+  if (status === "MANUAL_REVIEW") return "text-[var(--warning)]";
+  return "text-[var(--danger)]";
 }

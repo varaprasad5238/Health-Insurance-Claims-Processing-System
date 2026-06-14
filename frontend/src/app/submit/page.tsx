@@ -2,8 +2,10 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Activity, ArrowLeft, FileUp, Loader2, ShieldCheck } from "lucide-react";
+import { Activity, ArrowLeft, FileUp, Loader2, ShieldCheck, X } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const members = [
   ["EMP001", "Rajesh Kumar"],
@@ -30,14 +32,46 @@ const categories = [
 export default function SubmitClaim() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+
+  const addFiles = (files: FileList | null) => {
+    if (!files) {
+      return;
+    }
+    setSelectedFiles((currentFiles) => {
+      const nextFiles = [...currentFiles];
+      for (const file of Array.from(files)) {
+        const alreadySelected = nextFiles.some(
+          (existingFile) =>
+            existingFile.name === file.name &&
+            existingFile.size === file.size &&
+            existingFile.lastModified === file.lastModified,
+        );
+        if (!alreadySelected) {
+          nextFiles.push(file);
+        }
+      }
+      return nextFiles;
+    });
+  };
+
+  const removeFile = (fileToRemove: File) => {
+    setSelectedFiles((currentFiles) => currentFiles.filter((file) => file !== fileToRemove));
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (selectedFiles.length === 0) {
+      alert("Please upload at least one claim document.");
+      return;
+    }
     setLoading(true);
 
     const formData = new FormData(e.currentTarget);
+    formData.delete("documents");
+    selectedFiles.forEach((file) => formData.append("documents", file));
     try {
-      const res = await fetch("http://localhost:8000/api/claims/", {
+      const res = await fetch(`${API_BASE_URL}/api/claims/`, {
         method: "POST",
         body: formData,
       });
@@ -125,10 +159,41 @@ export default function SubmitClaim() {
                   type="file"
                   name="documents"
                   multiple
-                  required
                   accept="image/*,application/pdf"
+                  onChange={(event) => {
+                    addFiles(event.currentTarget.files);
+                    event.currentTarget.value = "";
+                  }}
                   className="block w-full text-sm text-muted file:mr-4 file:rounded-xl file:border-0 file:bg-[var(--brand-soft)] file:px-4 file:py-2 file:text-sm file:font-black file:text-[var(--brand-strong)] hover:file:brightness-95"
                 />
+                <p className="mt-3 text-xs text-muted">
+                  You can select multiple files at once or add them one by one. Selected files are attached together on submit.
+                </p>
+                {selectedFiles.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <div className="text-xs font-black uppercase tracking-[0.18em] text-muted">
+                      {selectedFiles.length} document{selectedFiles.length === 1 ? "" : "s"} selected
+                    </div>
+                    <div className="space-y-2">
+                      {selectedFiles.map((file) => (
+                        <div key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-3 rounded-xl bg-[var(--surface-strong)] px-3 py-2 text-sm">
+                          <div className="min-w-0">
+                            <div className="truncate font-bold">{file.name}</div>
+                            <div className="text-xs text-muted">{Math.max(file.size / 1024, 1).toFixed(1)} KB</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeFile(file)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-[var(--brand-soft)] hover:text-[var(--brand-strong)]"
+                            aria-label={`Remove ${file.name}`}
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </label>
 
