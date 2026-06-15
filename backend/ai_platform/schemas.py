@@ -82,3 +82,6 @@ class LLMResult(BaseModel):
     latency_ms: int | None = None
     fallback_used: bool = False
     primary_error: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0

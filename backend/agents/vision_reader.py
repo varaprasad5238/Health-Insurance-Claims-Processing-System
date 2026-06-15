@@ -79,6 +79,8 @@ class VisionReaderAgent:
 				image_bytes=document.get("raw_bytes"),
 				mime_type=document.get("content_type"),
 				context=input_summary,
+				claim_id=claim_id,
+				agent_name=agent_name,
 			)
 			classification = parse_model_json(result.raw_text or "", DocumentVisionListOutput)
 			logger.info(

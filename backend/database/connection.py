@@ -29,6 +29,16 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_claims_member_id ON claims(member_id)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_claims_policy_id ON claims(policy_id)"))
+        await ensure_column(conn, "llm_metrics", "input_tokens", "INTEGER NOT NULL DEFAULT 0")
+        await ensure_column(conn, "llm_metrics", "output_tokens", "INTEGER NOT NULL DEFAULT 0")
+        await ensure_column(conn, "llm_metrics", "total_tokens", "INTEGER NOT NULL DEFAULT 0")
     from backend.database.seed import seed_policy_data
 
     await seed_policy_data()
+
+
+async def ensure_column(conn, table_name: str, column_name: str, column_definition: str) -> None:
+    result = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    if column_name not in existing_columns:
+        await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))

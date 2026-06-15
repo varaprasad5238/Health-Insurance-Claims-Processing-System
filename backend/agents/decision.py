@@ -43,6 +43,8 @@ class DecisionSynthesisAgent:
 					"policy_decision": policy_decision.model_dump(),
 					"merged_claim": merged_claim.model_dump(),
 				},
+				claim_id=claim_id,
+				agent_name=self.agent_name,
 			)
 			message = parse_model_json(result.raw_text or "", DecisionMessageOutput)
 			synthesized = policy_decision.model_copy(

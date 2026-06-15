@@ -101,6 +101,27 @@ class TraceSpanModel(Base):
 
     claim = orm_relationship("ClaimModel", back_populates="spans")
 
+
+class LLMMetricModel(Base):
+    __tablename__ = "llm_metrics"
+
+    metric_id = Column(String, primary_key=True)
+    claim_id = Column(String, ForeignKey("claims.claim_id"), nullable=True, index=True)
+    agent_name = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)
+    model = Column(String, nullable=False, index=True)
+    is_fallback = Column(String, nullable=False, default="false")
+    primary_error = Column(String, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, index=True)
+    error_category = Column(String, nullable=True, index=True)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    created_at = Column(String, nullable=False, index=True)
+
+    claim = orm_relationship("ClaimModel")
+
 class ClaimDecisionModel(Base):
     __tablename__ = "claim_decisions"
 

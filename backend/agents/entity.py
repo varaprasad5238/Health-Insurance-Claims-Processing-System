@@ -52,6 +52,8 @@ class EntityExtractionAgent:
 					"claim_category": claim_category,
 					"documents": [document.model_dump() for document in documents],
 				},
+				claim_id=claim_id,
+				agent_name=self.agent_name,
 			)
 			extraction = parse_model_json(result.raw_text or "", StructuredExtractionOutput)
 			confidence = average_confidence(extraction.field_confidences)

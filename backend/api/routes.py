@@ -7,7 +7,8 @@ from sqlalchemy import desc, func, select
 from typing import Any, List
 
 from backend.database.connection import AsyncSessionLocal
-from backend.database.models import ClaimModel, TraceSpanModel, ClaimDecisionModel, GatingErrorModel, MemberModel, PolicyModel
+from backend.database.models import ClaimModel, TraceSpanModel, ClaimDecisionModel, GatingErrorModel, MemberModel, PolicyModel, LLMMetricModel
+from backend.ai_platform.metrics import normalize_agent_name
 from backend.services.document_preprocessor import prepare_for_vision_call
 from backend.storage.local import save_uploaded_document
 from backend.tasks.ingestion import run_claim_ingestion
@@ -55,6 +56,86 @@ async def list_policies_and_members(db: AsyncSession = Depends(get_db)):
                 ],
             }
             for policy in policies_result.scalars().all()
+        ]
+    }
+
+
+@router.get("/llm-metrics/summary")
+async def get_llm_metrics_summary(db: AsyncSession = Depends(get_db)):
+    metrics_result = await db.execute(select(LLMMetricModel))
+    metrics = metrics_result.scalars().all()
+    total_calls = len(metrics)
+    successful_calls = sum(1 for metric in metrics if metric.status == "SUCCESS")
+    failed_calls = total_calls - successful_calls
+    fallback_calls = sum(1 for metric in metrics if metric.is_fallback == "true")
+    latencies = [metric.latency_ms for metric in metrics if metric.latency_ms is not None]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else 0
+    total_input_tokens = sum(metric.input_tokens or 0 for metric in metrics)
+    total_output_tokens = sum(metric.output_tokens or 0 for metric in metrics)
+    total_tokens = sum(metric.total_tokens or 0 for metric in metrics)
+
+    by_provider: dict[str, int] = {}
+    by_agent: dict[str, int] = {}
+    by_error: dict[str, int] = {}
+    tokens_by_provider: dict[str, dict[str, int]] = {}
+    tokens_by_agent: dict[str, dict[str, int]] = {}
+    for metric in metrics:
+        agent_name = normalize_agent_name(metric.agent_name)
+        by_provider[metric.provider] = by_provider.get(metric.provider, 0) + 1
+        by_agent[agent_name] = by_agent.get(agent_name, 0) + 1
+        tokens_by_provider.setdefault(metric.provider, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+        tokens_by_provider[metric.provider]["input_tokens"] += metric.input_tokens or 0
+        tokens_by_provider[metric.provider]["output_tokens"] += metric.output_tokens or 0
+        tokens_by_provider[metric.provider]["total_tokens"] += metric.total_tokens or 0
+        tokens_by_agent.setdefault(agent_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+        tokens_by_agent[agent_name]["input_tokens"] += metric.input_tokens or 0
+        tokens_by_agent[agent_name]["output_tokens"] += metric.output_tokens or 0
+        tokens_by_agent[agent_name]["total_tokens"] += metric.total_tokens or 0
+        if metric.error_category:
+            by_error[metric.error_category] = by_error.get(metric.error_category, 0) + 1
+
+    return {
+        "total_calls": total_calls,
+        "successful_calls": successful_calls,
+        "failed_calls": failed_calls,
+        "fallback_calls": fallback_calls,
+        "success_rate": round(successful_calls / total_calls, 3) if total_calls else 0,
+        "fallback_rate": round(fallback_calls / total_calls, 3) if total_calls else 0,
+        "avg_latency_ms": avg_latency,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_tokens": total_tokens,
+        "by_provider": by_provider,
+        "by_agent": by_agent,
+        "tokens_by_provider": tokens_by_provider,
+        "tokens_by_agent": tokens_by_agent,
+        "by_error": by_error,
+    }
+
+
+@router.get("/llm-metrics/recent")
+async def get_recent_llm_metrics(db: AsyncSession = Depends(get_db), limit: int = Query(25, ge=1, le=100)):
+    result = await db.execute(select(LLMMetricModel).order_by(desc(LLMMetricModel.created_at)).limit(limit))
+    metrics = result.scalars().all()
+    return {
+        "metrics": [
+            {
+                "metric_id": metric.metric_id,
+                "claim_id": metric.claim_id,
+                "agent_name": normalize_agent_name(metric.agent_name),
+                "provider": metric.provider,
+                "model": metric.model,
+                "is_fallback": metric.is_fallback == "true",
+                "primary_error": metric.primary_error,
+                "latency_ms": metric.latency_ms,
+                "status": metric.status,
+                "error_category": metric.error_category,
+                "input_tokens": metric.input_tokens,
+                "output_tokens": metric.output_tokens,
+                "total_tokens": metric.total_tokens,
+                "created_at": metric.created_at,
+            }
+            for metric in metrics
         ]
     }
 

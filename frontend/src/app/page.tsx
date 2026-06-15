@@ -83,6 +83,9 @@ export default function Home() {
                 <CheckCircle2 className="h-3.5 w-3.5" /> Local Demo
               </span>
               <ThemeToggle />
+              <Link href="/llm-metrics" className="secondary-button">
+                LLM Metrics
+              </Link>
               <Link href="/submit" className="primary-button">
                 New Claim <ArrowRight className="h-4 w-4" />
               </Link>

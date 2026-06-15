@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from backend.ai_platform.config import PlatformSettings, get_platform_settings
 from backend.ai_platform.errors import InvalidModelOutput, PlatformError, ProviderTimeout, ProviderUnavailable, SchemaValidationFailed
+from backend.ai_platform.metrics import record_llm_metric
 from backend.ai_platform.prompts import JSON_REPAIR_PROMPT
 from backend.ai_platform.schemas import (
     DecisionMessageOutput,
@@ -73,6 +74,8 @@ class BaseLLMClient(ABC):
         image_bytes: bytes | None = None,
         mime_type: str | None = None,
         context: dict[str, Any] | None = None,
+        claim_id: str | None = None,
+        agent_name: str | None = None,
     ) -> LLMResult:
         raise NotImplementedError
 
@@ -90,7 +93,10 @@ class StubLLMClient(BaseLLMClient):
         started = time.perf_counter()
         parsed = self._stub_payload(context or {})
         latency_ms = int((time.perf_counter() - started) * 1000)
-        return LLMResult(model=model or "stub-llm", raw_text=parsed.model_dump_json(), latency_ms=latency_ms)
+        raw_text = parsed.model_dump_json()
+        input_tokens = estimate_tokens(prompt, context=context, image_bytes=image_bytes)
+        output_tokens = estimate_text_tokens(raw_text)
+        return LLMResult(model=model or "stub-llm", raw_text=raw_text, latency_ms=latency_ms, input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=input_tokens + output_tokens)
 
     def _stub_payload(self, context: dict[str, Any]) -> BaseModel:
         if context.get("task") == "structured_extraction":
@@ -194,8 +200,13 @@ class GeminiLLMClient(BaseLLMClient):
 
         raw_text = response.text or ""
         latency_ms = int((time.perf_counter() - started) * 1000)
+        input_tokens, output_tokens, total_tokens = extract_gemini_usage(response)
+        if total_tokens == 0:
+            input_tokens = estimate_tokens(prompt, context=context, image_bytes=image_bytes)
+            output_tokens = estimate_text_tokens(raw_text)
+            total_tokens = input_tokens + output_tokens
         logger.info("Gemini response received: model=%s latency_ms=%s", selected_model, latency_ms)
-        return LLMResult(model=selected_model, raw_text=raw_text, latency_ms=latency_ms)
+        return LLMResult(model=selected_model, raw_text=raw_text, latency_ms=latency_ms, input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens)
 
 
 class OpenAILLMClient(BaseLLMClient):
@@ -261,8 +272,13 @@ class OpenAILLMClient(BaseLLMClient):
 
         raw_text = response.choices[0].message.content or ""
         latency_ms = int((time.perf_counter() - started) * 1000)
+        input_tokens, output_tokens, total_tokens = extract_openai_usage(response)
+        if total_tokens == 0:
+            input_tokens = estimate_tokens(prompt, context=context, image_bytes=image_bytes)
+            output_tokens = estimate_text_tokens(raw_text)
+            total_tokens = input_tokens + output_tokens
         logger.info("OpenAI response received: model=%s latency_ms=%s", selected_model, latency_ms)
-        return LLMResult(model=selected_model, raw_text=raw_text, latency_ms=latency_ms)
+        return LLMResult(model=selected_model, raw_text=raw_text, latency_ms=latency_ms, input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens)
 
 
 class LLMPlatform:
@@ -297,6 +313,8 @@ class LLMPlatform:
         image_bytes: bytes | None = None,
         mime_type: str | None = None,
         context: dict[str, Any] | None = None,
+        claim_id: str | None = None,
+        agent_name: str | None = None,
     ) -> T:
         result = await self.get_llm_response(
             prompt=prompt,
@@ -304,6 +322,8 @@ class LLMPlatform:
             image_bytes=image_bytes,
             mime_type=mime_type,
             context=context,
+            claim_id=claim_id,
+            agent_name=agent_name,
         )
         return parse_model_json(result.raw_text or "", response_model)
 
@@ -316,6 +336,8 @@ class LLMPlatform:
         image_bytes: bytes | None = None,
         mime_type: str | None = None,
         context: dict[str, Any] | None = None,
+        claim_id: str | None = None,
+        agent_name: str | None = None,
     ) -> LLMResult:
         result = await self.get_llm_response(
             prompt=prompt,
@@ -323,6 +345,8 @@ class LLMPlatform:
             image_bytes=image_bytes,
             mime_type=mime_type,
             context=context,
+            claim_id=claim_id,
+            agent_name=agent_name,
         )
         result.raw_text = parse_model_json(result.raw_text or "", response_model).model_dump_json()
         return result
@@ -335,6 +359,8 @@ class LLMPlatform:
         image_bytes: bytes | None = None,
         mime_type: str | None = None,
         context: dict[str, Any] | None = None,
+        claim_id: str | None = None,
+        agent_name: str | None = None,
     ) -> LLMResult:
         last_error: Exception | None = None
         attempts = self.settings.llm_max_retries + 1
@@ -376,6 +402,12 @@ class LLMPlatform:
                     result.model = f"{candidate_provider}:{result.model}"
                     result.fallback_used = fallback_used
                     result.primary_error = primary_error
+                    await safe_record_llm_metric(
+                        claim_id=claim_id,
+                        agent_name=agent_name,
+                        result=result,
+                        status="SUCCESS",
+                    )
                     logger.info(
                         "LLM attempt succeeded: model=%s fallback=%s primary_error=%s",
                         result.model,
@@ -387,6 +419,19 @@ class LLMPlatform:
                     last_error = exc
                     if isinstance(exc, PlatformError):
                         primary_error = primary_error or exc.code
+                    await safe_record_llm_metric(
+                        claim_id=claim_id,
+                        agent_name=agent_name,
+                        result=LLMResult(
+                            model=f"{candidate_provider}:{candidate_model}",
+                            raw_text=None,
+                            latency_ms=None,
+                            fallback_used=fallback_used,
+                            primary_error=primary_error,
+                        ),
+                        status="ERROR",
+                        error_category=getattr(exc, "code", type(exc).__name__),
+                    )
                     logger.warning(
                         "LLM attempt failed: provider=%s model=%s attempt=%s error_code=%s",
                         candidate_provider,
@@ -400,6 +445,31 @@ class LLMPlatform:
         raise last_error or InvalidModelOutput("LLM generation failed")
 
 
+async def safe_record_llm_metric(
+    *,
+    claim_id: str | None,
+    agent_name: str | None,
+    result: LLMResult,
+    status: str,
+    error_category: str | None = None,
+) -> None:
+    try:
+        await record_llm_metric(
+            claim_id=claim_id,
+            agent_name=agent_name,
+            model_value=result.model,
+            is_fallback=result.fallback_used,
+            primary_error=result.primary_error,
+            latency_ms=result.latency_ms,
+            status=status,
+            error_category=error_category,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+    except Exception:
+        logger.exception("Failed to record LLM metric")
+
+
 def parse_model_json(raw_text: str, response_model: type[T]) -> T:
     try:
         payload = json.loads(raw_text)
@@ -409,6 +479,41 @@ def parse_model_json(raw_text: str, response_model: type[T]) -> T:
         return response_model.model_validate(payload)
     except ValidationError as exc:
         raise SchemaValidationFailed(str(exc)) from exc
+
+
+def estimate_text_tokens(text: str | None) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def estimate_tokens(prompt: str, *, context: dict[str, Any] | None = None, image_bytes: bytes | None = None) -> int:
+    text = prompt
+    if context:
+        text += json.dumps(context, default=str)
+    text_tokens = estimate_text_tokens(text)
+    image_tokens = 800 if image_bytes else 0
+    return text_tokens + image_tokens
+
+
+def extract_openai_usage(response) -> tuple[int, int, int]:
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return 0, 0, 0
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", input_tokens + output_tokens) or 0)
+    return input_tokens, output_tokens, total_tokens
+
+
+def extract_gemini_usage(response) -> tuple[int, int, int]:
+    usage = getattr(response, "usage_metadata", None)
+    if not usage:
+        return 0, 0, 0
+    input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+    output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+    total_tokens = int(getattr(usage, "total_token_count", input_tokens + output_tokens) or 0)
+    return input_tokens, output_tokens, total_tokens
 
 
 def get_llm_platform() -> LLMPlatform:
