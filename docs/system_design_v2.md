@@ -556,30 +556,35 @@ class Policy(BaseModel):
 
 ## 8. Confidence Model
 
-Confidence is computed, not estimated. It flows upward from individual fields to the final decision.
+Confidence is computed, not estimated. The orchestrator combines document quality, entity extraction confidence, reconciliation quality, and failure penalties into one extraction confidence score.
 
 ```
-FIELD-LEVEL CONFIDENCE (from vision + entity extraction)
-    patient_name: 0.95, amount_total: 0.72, diagnosis: 0.88, etc.
-                        │
-                 Weighted average
-        (amount 0.30, patient 0.25, diagnosis 0.20, doctor 0.15, date 0.10)
-                        │
-                        ▼
-              EXTRACTION CONFIDENCE
-              = field_conf − (0.15 × number_of_failed_agents)
-                        │
-                 Threshold gate
-                        │
-          ┌─────────────┼─────────────┐
-          │             │             │
-        < 0.65      0.65–0.85      > 0.85
-          │             │             │
-    MANUAL_REVIEW   Proceed with   Proceed with
-    (forced)        caution flag   high confidence
+DOCUMENT CONFIDENCE
+    average(classification_confidence * 0.60 + readability * 0.40)
+                                                │
+                                                ▼
+ENTITY CONFIDENCE
+    weighted field confidence
+    amount 0.30, patient 0.25, diagnosis 0.20, doctor 0.15, date 0.10
+                                                │
+                                                ▼
+RECONCILIATION CONFIDENCE
+    starts at 1.0, reduced by amount discrepancies and fraud indicators
+                                                │
+                                                ▼
+EXTRACTION CONFIDENCE
+    = document_confidence * 0.35
+    + entity_confidence * 0.45
+    + reconciliation_confidence * 0.20
+    - failed/discrepancy/fraud penalties
+                                                │
+                                                ▼
+THRESHOLD
+    < 0.65  => MANUAL_REVIEW
+    >= 0.65 => continue to policy engine
 ```
 
-**What lowers confidence:** Handwritten text, rubber stamps over content, incomplete documents, conflicting values across documents, missing required fields, agent timeouts or failures.
+**What lowers confidence:** low document readability, low classification confidence, missing/uncertain extracted fields, amount discrepancies, fraud indicators, incomplete documents, conflicting values across documents, agent timeouts, or agent failures.
 
 ---
 
