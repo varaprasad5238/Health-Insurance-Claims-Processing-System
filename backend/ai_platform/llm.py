@@ -14,6 +14,7 @@ from backend.ai_platform.prompts import JSON_REPAIR_PROMPT
 from backend.ai_platform.schemas import (
     DecisionMessageOutput,
     DocumentVisionOutput,
+    DocumentVisionListOutput,
     LLMResult,
     StructuredExtractionOutput,
     VisionReadingOutput,
@@ -130,14 +131,16 @@ class StubLLMClient(BaseLLMClient):
             document_type = "LAB_REPORT"
         elif "pharmacy" in file_name:
             document_type = "PHARMACY_BILL"
-        return DocumentVisionOutput(
+        return DocumentVisionListOutput(documents=[DocumentVisionOutput(
             document_type=document_type,
             confidence=0.92,
             readability=0.9,
             patient_name_raw=context.get("patient_name") or "Rajesh Kumar",
             quality_flags=[],
             transcript="Patient: Rajesh Kumar\nDiagnosis: Viral Fever\nTotal Amount: 1500.00",
-        )
+            source_file_name=context.get("file_name"),
+            source_page_range="1",
+        )])
 
 
 class GeminiLLMClient(BaseLLMClient):

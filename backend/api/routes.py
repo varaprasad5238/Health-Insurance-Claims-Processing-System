@@ -7,7 +7,8 @@ from sqlalchemy import desc, func, select
 from typing import Any, List
 
 from backend.database.connection import AsyncSessionLocal
-from backend.database.models import ClaimModel, TraceSpanModel, ClaimDecisionModel, GatingErrorModel
+from backend.database.models import ClaimModel, TraceSpanModel, ClaimDecisionModel, GatingErrorModel, MemberModel, PolicyModel
+from backend.services.document_preprocessor import prepare_for_vision_call
 from backend.storage.local import save_uploaded_document
 from backend.tasks.ingestion import run_claim_ingestion
 
@@ -16,6 +17,46 @@ router = APIRouter(prefix="/api/claims", tags=["claims"])
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+@router.get("/policies/members")
+async def list_policies_and_members(db: AsyncSession = Depends(get_db)):
+    policies_result = await db.execute(select(PolicyModel).order_by(PolicyModel.policy_id))
+    members_result = await db.execute(select(MemberModel).order_by(MemberModel.policy_id, MemberModel.member_id))
+    members_by_policy: dict[str, list[MemberModel]] = {}
+    for member in members_result.scalars().all():
+        members_by_policy.setdefault(member.policy_id, []).append(member)
+
+    return {
+        "policies": [
+            {
+                "policy_id": policy.policy_id,
+                "policy_name": policy.policy_name,
+                "insurer": policy.insurer,
+                "company_name": policy.company_name,
+                "status": policy.status,
+                "full_pledged_amount": policy.full_pledged_amount,
+                "annual_opd_limit": policy.annual_opd_limit,
+                "remaining_opd_limit": policy.remaining_opd_limit,
+                "family_floater_limit": policy.family_floater_limit,
+                "family_floater_remaining": policy.family_floater_remaining,
+                "members": [
+                    {
+                        "member_id": member.member_id,
+                        "name": member.name,
+                        "relationship": member.relationship,
+                        "primary_member_id": member.primary_member_id,
+                        "join_date": member.join_date,
+                        "annual_opd_limit": member.annual_opd_limit,
+                        "ytd_claimed_amount": member.ytd_claimed_amount,
+                        "remaining_opd_limit": member.remaining_opd_limit,
+                    }
+                    for member in members_by_policy.get(policy.policy_id, [])
+                ],
+            }
+            for policy in policies_result.scalars().all()
+        ]
+    }
 
 @router.post("/")
 async def submit_claim(
@@ -29,26 +70,37 @@ async def submit_claim(
 ):
     claim_id = f"CLM-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
     now_iso = datetime.now(timezone.utc).isoformat()
+    member = await db.get(MemberModel, member_id)
+    policy = await db.get(PolicyModel, "PLUM_GHI_2024")
+    if not member:
+        raise HTTPException(status_code=400, detail=f"Unknown member_id: {member_id}")
+    if not policy:
+        raise HTTPException(status_code=500, detail="Policy PLUM_GHI_2024 is not seeded")
     
     document_payloads: list[dict[str, Any]] = []
     for index, document in enumerate(documents, start=1):
         raw_bytes = await document.read()
         file_name = document.filename or f"document_{index}"
+        content_type = document.content_type or "application/octet-stream"
         saved_path = save_uploaded_document(
             claim_id=claim_id,
             file_name=file_name,
             content=raw_bytes,
             index=index,
         )
-        document_payloads.append(
-            {
-                "file_name": file_name,
-                "content_type": document.content_type or "application/octet-stream",
-                "raw_bytes": raw_bytes,
-                "size_bytes": len(raw_bytes),
-                "stored_path": str(saved_path),
-            }
-        )
+        page_images = prepare_for_vision_call(str(saved_path), content_type)
+        for page_index, image_bytes in enumerate(page_images, start=1):
+            document_payloads.append(
+                {
+                    "file_name": file_name,
+                    "content_type": "image/png" if content_type == "application/pdf" else content_type,
+                    "raw_bytes": image_bytes,
+                    "size_bytes": len(image_bytes),
+                    "stored_path": str(saved_path),
+                    "source_page_range": str(page_index),
+                    "source_upload_index": index,
+                }
+            )
 
     new_claim = ClaimModel(
         claim_id=claim_id,
@@ -114,6 +166,12 @@ async def list_claims(
     decision_result = await db.execute(select(ClaimDecisionModel))
     decisions = {decision.claim_id: decision for decision in decision_result.scalars().all()}
 
+    member_result = await db.execute(select(MemberModel))
+    members = {member.member_id: member for member in member_result.scalars().all()}
+
+    policy_result = await db.execute(select(PolicyModel))
+    policies = {policy.policy_id: policy for policy in policy_result.scalars().all()}
+
     return {
         "page": page,
         "page_size": page_size,
@@ -123,6 +181,13 @@ async def list_claims(
             {
                 "claim_id": claim.claim_id,
                 "member_id": claim.member_id,
+                "member_name": members[claim.member_id].name if claim.member_id in members else None,
+                "member_relationship": members[claim.member_id].relationship if claim.member_id in members else None,
+                "member_remaining_opd_limit": members[claim.member_id].remaining_opd_limit if claim.member_id in members else None,
+                "policy_id": claim.policy_id,
+                "policy_name": policies[claim.policy_id].policy_name if claim.policy_id in policies else None,
+                "policy_remaining_opd_limit": policies[claim.policy_id].remaining_opd_limit if claim.policy_id in policies else None,
+                "policy_full_pledged_amount": policies[claim.policy_id].full_pledged_amount if claim.policy_id in policies else None,
                 "claim_category": claim.claim_category,
                 "claimed_amount": claim.claimed_amount,
                 "status": claim.status,

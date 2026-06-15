@@ -6,6 +6,12 @@ import { Activity, ArrowLeft, FileUp, Loader2, ShieldCheck, X } from "lucide-rea
 import ThemeToggle from "@/components/ThemeToggle";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const MIN_CLAIM_AMOUNT = 500;
+const MAX_CLAIM_AMOUNT = 5000;
+const MAX_DOCUMENTS = 4;
+const MAX_FILE_SIZE_MB = 3;
+const MAX_TOTAL_UPLOAD_SIZE_MB = 8;
+const BYTES_PER_MB = 1024 * 1024;
 
 const members = [
   ["EMP001", "Rajesh Kumar"],
@@ -41,6 +47,14 @@ export default function SubmitClaim() {
     setSelectedFiles((currentFiles) => {
       const nextFiles = [...currentFiles];
       for (const file of Array.from(files)) {
+        if (file.size > MAX_FILE_SIZE_MB * BYTES_PER_MB) {
+          alert(`${file.name} is too large. Maximum file size is ${MAX_FILE_SIZE_MB} MB.`);
+          continue;
+        }
+        if (nextFiles.length >= MAX_DOCUMENTS) {
+          alert(`You can upload a maximum of ${MAX_DOCUMENTS} documents per claim.`);
+          break;
+        }
         const alreadySelected = nextFiles.some(
           (existingFile) =>
             existingFile.name === file.name &&
@@ -48,6 +62,11 @@ export default function SubmitClaim() {
             existingFile.lastModified === file.lastModified,
         );
         if (!alreadySelected) {
+          const nextTotalSize = nextFiles.reduce((total, selectedFile) => total + selectedFile.size, 0) + file.size;
+          if (nextTotalSize > MAX_TOTAL_UPLOAD_SIZE_MB * BYTES_PER_MB) {
+            alert(`Total upload size cannot exceed ${MAX_TOTAL_UPLOAD_SIZE_MB} MB.`);
+            break;
+          }
           nextFiles.push(file);
         }
       }
@@ -65,9 +84,29 @@ export default function SubmitClaim() {
       alert("Please upload at least one claim document.");
       return;
     }
-    setLoading(true);
+    if (selectedFiles.length > MAX_DOCUMENTS) {
+      alert(`You can upload a maximum of ${MAX_DOCUMENTS} documents per claim.`);
+      return;
+    }
+    if (selectedFiles.some((file) => file.size > MAX_FILE_SIZE_MB * BYTES_PER_MB)) {
+      alert(`Each file must be ${MAX_FILE_SIZE_MB} MB or smaller.`);
+      return;
+    }
+    const totalUploadSize = selectedFiles.reduce((total, file) => total + file.size, 0);
+    if (totalUploadSize > MAX_TOTAL_UPLOAD_SIZE_MB * BYTES_PER_MB) {
+      alert(`Total upload size cannot exceed ${MAX_TOTAL_UPLOAD_SIZE_MB} MB.`);
+      return;
+    }
 
     const formData = new FormData(e.currentTarget);
+    const claimedAmount = Number(formData.get("claimed_amount"));
+    if (!Number.isFinite(claimedAmount) || claimedAmount < MIN_CLAIM_AMOUNT || claimedAmount > MAX_CLAIM_AMOUNT) {
+      alert(`Claimed amount must be between ₹${MIN_CLAIM_AMOUNT} and ₹${MAX_CLAIM_AMOUNT}.`);
+      return;
+    }
+
+    setLoading(true);
+
     formData.delete("documents");
     selectedFiles.forEach((file) => formData.append("documents", file));
     try {
@@ -144,7 +183,8 @@ export default function SubmitClaim() {
 
               <label className="space-y-2">
                 <span className="text-sm font-bold">Claimed Amount</span>
-                <input type="number" step="0.01" name="claimed_amount" required placeholder="1500.00" className="input-surface" />
+                <input type="number" min={MIN_CLAIM_AMOUNT} max={MAX_CLAIM_AMOUNT} step="0.01" name="claimed_amount" required placeholder="1500.00" className="input-surface" />
+                <span className="block text-xs text-muted">Allowed range: ₹{MIN_CLAIM_AMOUNT} to ₹{MAX_CLAIM_AMOUNT}</span>
               </label>
             </div>
 
@@ -167,7 +207,7 @@ export default function SubmitClaim() {
                   className="block w-full text-sm text-muted file:mr-4 file:rounded-xl file:border-0 file:bg-[var(--brand-soft)] file:px-4 file:py-2 file:text-sm file:font-black file:text-[var(--brand-strong)] hover:file:brightness-95"
                 />
                 <p className="mt-3 text-xs text-muted">
-                  You can select multiple files at once or add them one by one. Selected files are attached together on submit.
+                  You can select multiple files at once or add them one by one. Maximum {MAX_DOCUMENTS} files, {MAX_FILE_SIZE_MB} MB per file, {MAX_TOTAL_UPLOAD_SIZE_MB} MB total. A single PDF can contain all claim documents.
                 </p>
                 {selectedFiles.length > 0 && (
                   <div className="mt-4 space-y-2">

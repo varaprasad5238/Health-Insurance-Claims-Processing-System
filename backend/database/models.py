@@ -1,13 +1,55 @@
 from sqlalchemy import Column, String, Integer, Float, ForeignKey, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship as orm_relationship
 from .connection import Base
+
+
+class PolicyModel(Base):
+    __tablename__ = "policies"
+
+    policy_id = Column(String, primary_key=True)
+    policy_name = Column(String, nullable=False)
+    insurer = Column(String, nullable=False)
+    company_name = Column(String, nullable=False)
+    policy_start_date = Column(String, nullable=False)
+    policy_end_date = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    full_pledged_amount = Column(String, nullable=False)
+    annual_opd_limit = Column(String, nullable=False)
+    remaining_opd_limit = Column(String, nullable=False)
+    family_floater_enabled = Column(String, nullable=False, default="false")
+    family_floater_limit = Column(String, nullable=True)
+    family_floater_remaining = Column(String, nullable=True)
+
+    members = orm_relationship("MemberModel", back_populates="policy")
+    claims = orm_relationship("ClaimModel", back_populates="policy")
+
+
+class MemberModel(Base):
+    __tablename__ = "members"
+
+    member_id = Column(String, primary_key=True)
+    policy_id = Column(String, ForeignKey("policies.policy_id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    date_of_birth = Column(String, nullable=False)
+    gender = Column(String, nullable=True)
+    relationship = Column(String, nullable=False)
+    join_date = Column(String, nullable=True)
+    primary_member_id = Column(String, ForeignKey("members.member_id"), nullable=True, index=True)
+    full_pledged_amount = Column(String, nullable=False)
+    annual_opd_limit = Column(String, nullable=False)
+    ytd_claimed_amount = Column(String, nullable=False, default="0.00")
+    remaining_opd_limit = Column(String, nullable=False)
+
+    policy = orm_relationship("PolicyModel", back_populates="members")
+    primary_member = orm_relationship("MemberModel", remote_side=[member_id], backref="dependents")
+    claims = orm_relationship("ClaimModel", back_populates="member")
 
 class ClaimModel(Base):
     __tablename__ = "claims"
 
     claim_id = Column(String, primary_key=True)
-    member_id = Column(String, nullable=False)
-    policy_id = Column(String, nullable=False)
+    member_id = Column(String, ForeignKey("members.member_id"), nullable=False, index=True)
+    policy_id = Column(String, ForeignKey("policies.policy_id"), nullable=False, index=True)
     claim_category = Column(String, nullable=False)
     treatment_date = Column(String, nullable=False)
     submission_date = Column(String, nullable=False)
@@ -19,24 +61,26 @@ class ClaimModel(Base):
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
-    spans = relationship(
+    spans = orm_relationship(
         "TraceSpanModel",
         back_populates="claim",
         order_by="TraceSpanModel.started_at",
         cascade="all, delete-orphan",
     )
-    decision = relationship(
+    decision = orm_relationship(
         "ClaimDecisionModel",
         back_populates="claim",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    gating_error = relationship(
+    gating_error = orm_relationship(
         "GatingErrorModel",
         back_populates="claim",
         uselist=False,
         cascade="all, delete-orphan",
     )
+    member = orm_relationship("MemberModel", back_populates="claims")
+    policy = orm_relationship("PolicyModel", back_populates="claims")
 
 class TraceSpanModel(Base):
     __tablename__ = "trace_spans"
@@ -55,7 +99,7 @@ class TraceSpanModel(Base):
     errors = Column(Text, nullable=True)
     model_used = Column(String, nullable=True)
 
-    claim = relationship("ClaimModel", back_populates="spans")
+    claim = orm_relationship("ClaimModel", back_populates="spans")
 
 class ClaimDecisionModel(Base):
     __tablename__ = "claim_decisions"
@@ -73,7 +117,7 @@ class ClaimDecisionModel(Base):
     manual_review_note = Column(Text, nullable=True)
     decided_at = Column(String, nullable=False)
 
-    claim = relationship("ClaimModel", back_populates="decision")
+    claim = orm_relationship("ClaimModel", back_populates="decision")
 
 class GatingErrorModel(Base):
     __tablename__ = "gating_errors"
@@ -84,4 +128,4 @@ class GatingErrorModel(Base):
     detail = Column(Text, nullable=False)
     occurred_at = Column(String, nullable=False)
 
-    claim = relationship("ClaimModel", back_populates="gating_error")
+    claim = orm_relationship("ClaimModel", back_populates="gating_error")

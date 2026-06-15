@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 DocumentType = Literal[
     "PRESCRIPTION",
@@ -29,6 +29,21 @@ class DocumentVisionOutput(BaseModel):
     patient_name_raw: str | None = None
     quality_flags: list[QualityFlag] = Field(default_factory=list)
     transcript: str
+    source_file_name: str | None = None
+    source_page_range: str | None = None
+
+    @field_validator("source_page_range", mode="before")
+    @classmethod
+    def coerce_source_page_range(cls, value):
+        if value is None or isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return ",".join(str(item) for item in value)
+        return str(value)
+
+
+class DocumentVisionListOutput(BaseModel):
+    documents: list[DocumentVisionOutput] = Field(default_factory=list)
 
 class VisionReadingOutput(BaseModel):
     raw_transcript: str

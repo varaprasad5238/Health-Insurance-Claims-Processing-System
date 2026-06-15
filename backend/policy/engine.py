@@ -1,13 +1,12 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from backend.agents.orchestrator import MergedClaimResult
 from backend.models.policy import Policy, PolicyMember
-from backend.policy.loader import load_policy
+from backend.policy.loader import get_policy
 from backend.tracing.store import TraceStore
 
 
@@ -47,8 +46,7 @@ class PolicyEngine:
     stage_order = 6
 
     def __init__(self, policy: Policy | None = None):
-        policy_path = Path(__file__).resolve().parents[2] / "assignment" / "policy_terms.json"
-        self.policy = policy or load_policy(str(policy_path))
+        self.policy = policy or get_policy()
 
     async def evaluate(
         self,

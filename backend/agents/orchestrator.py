@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from backend.agents.reconciler import AmountReconciliationResult
-from backend.ai_platform.schemas import LineItemOutput, StructuredExtractionOutput
+from backend.ai_platform.schemas import DocumentVisionOutput, LineItemOutput, StructuredExtractionOutput
 from backend.logging_config import get_logger
 from backend.tracing.store import TraceStore
 
@@ -30,6 +30,9 @@ class MergedClaimResult(BaseModel):
 	conflict_log: list[ConflictEntry] = Field(default_factory=list)
 	discrepancy_flags: list[dict] = Field(default_factory=list)
 	fraud_indicators: list[dict] = Field(default_factory=list)
+	document_confidence: float | None = None
+	entity_confidence: float | None = None
+	reconciliation_confidence: float | None = None
 
 
 class OrchestratorAgent:
@@ -40,6 +43,7 @@ class OrchestratorAgent:
 		self,
 		*,
 		claim_id: str,
+		documents: list[DocumentVisionOutput],
 		extraction: StructuredExtractionOutput,
 		reconciliation: AmountReconciliationResult,
 		failed_agents: list[str] | None = None,
@@ -49,6 +53,7 @@ class OrchestratorAgent:
 			self.agent_name,
 			stage_order=self.stage_order,
 			input_summary={
+				"documents": len(documents),
 				"patient_name": extraction.patient_name,
 				"diagnosis_primary": extraction.diagnosis_primary,
 				"claimed_amount": reconciliation.claimed_amount,
@@ -61,6 +66,7 @@ class OrchestratorAgent:
 		)
 		try:
 			result = self.evaluate(
+				documents=documents,
 				extraction=extraction,
 				reconciliation=reconciliation,
 				failed_agents=failed_agents or [],
@@ -77,6 +83,9 @@ class OrchestratorAgent:
 					"payable_basis_amount": result.payable_basis_amount,
 					"discrepancies": len(result.discrepancy_flags),
 					"fraud_indicators": len(result.fraud_indicators),
+					"document_confidence": result.document_confidence,
+					"entity_confidence": result.entity_confidence,
+					"reconciliation_confidence": result.reconciliation_confidence,
 					"conflict_log": [conflict.model_dump() for conflict in result.conflict_log],
 				},
 				confidence_delta=round(result.extraction_confidence - 0.85, 3),
@@ -104,6 +113,7 @@ class OrchestratorAgent:
 	def evaluate(
 		self,
 		*,
+		documents: list[DocumentVisionOutput],
 		extraction: StructuredExtractionOutput,
 		reconciliation: AmountReconciliationResult,
 		failed_agents: list[str],
@@ -121,7 +131,17 @@ class OrchestratorAgent:
 				)
 			)
 
+		document_confidence = compute_document_confidence(documents)
+		entity_confidence = compute_entity_confidence(extraction.field_confidences)
+		reconciliation_confidence = compute_reconciliation_confidence(
+			discrepancy_count=len(reconciliation.discrepancy_flags),
+			fraud_indicator_count=len(reconciliation.fraud_indicators),
+		)
+
 		confidence = compute_extraction_confidence(
+			document_confidence=document_confidence,
+			entity_confidence=entity_confidence,
+			reconciliation_confidence=reconciliation_confidence,
 			field_confidences=extraction.field_confidences,
 			failed_agents=failed_agents,
 			discrepancy_count=len(reconciliation.discrepancy_flags),
@@ -144,16 +164,35 @@ class OrchestratorAgent:
 			conflict_log=conflict_log,
 			discrepancy_flags=discrepancy_flags,
 			fraud_indicators=fraud_indicators,
+			document_confidence=document_confidence,
+			entity_confidence=entity_confidence,
+			reconciliation_confidence=reconciliation_confidence,
 		)
 
 
 def compute_extraction_confidence(
 	*,
+	document_confidence: float,
+	entity_confidence: float,
+	reconciliation_confidence: float,
 	field_confidences: dict[str, float],
 	failed_agents: list[str],
 	discrepancy_count: int,
 	fraud_indicator_count: int,
 ) -> float:
+	base_confidence = (document_confidence * 0.35) + (entity_confidence * 0.45) + (reconciliation_confidence * 0.20)
+	penalty = (0.15 * len(failed_agents)) + (0.05 * discrepancy_count) + (0.08 * fraud_indicator_count)
+	return round(max(0.0, min(1.0, base_confidence - penalty)), 3)
+
+
+def compute_document_confidence(documents: list[DocumentVisionOutput]) -> float:
+	if not documents:
+		return 0.0
+	scores = [(document.confidence * 0.60) + (document.readability * 0.40) for document in documents]
+	return round(sum(scores) / len(scores), 3)
+
+
+def compute_entity_confidence(field_confidences: dict[str, float]) -> float:
 	weights = {
 		"total_amount": 0.30,
 		"amount": 0.30,
@@ -170,6 +209,8 @@ def compute_extraction_confidence(
 		if field in field_confidences:
 			weighted_total += field_confidences[field] * weight
 			weight_sum += weight
-	base_confidence = weighted_total / weight_sum if weight_sum else 0.75
-	penalty = (0.15 * len(failed_agents)) + (0.05 * discrepancy_count) + (0.08 * fraud_indicator_count)
-	return round(max(0.0, min(1.0, base_confidence - penalty)), 3)
+	return round(weighted_total / weight_sum, 3) if weight_sum else 0.75
+
+
+def compute_reconciliation_confidence(*, discrepancy_count: int, fraud_indicator_count: int) -> float:
+	return round(max(0.0, 1.0 - (0.12 * discrepancy_count) - (0.18 * fraud_indicator_count)), 3)

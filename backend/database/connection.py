@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import event
+from sqlalchemy import event, text
 
 DATABASE_URL = "sqlite+aiosqlite:///claims.db"
 
@@ -27,3 +27,8 @@ Base = declarative_base()
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_claims_member_id ON claims(member_id)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_claims_policy_id ON claims(policy_id)"))
+    from backend.database.seed import seed_policy_data
+
+    await seed_policy_data()

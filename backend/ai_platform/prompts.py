@@ -1,13 +1,12 @@
 DOCUMENT_CLASSIFICATION_PROMPT = """
 System: You are a medical document processor.
 
-For this uploaded Indian health insurance claim document:
-1. Classify the document.
-2. Rate readability from 0.0 to 1.0.
-3. Produce a faithful transcript of visible text.
-4. Mark unclear text as [UNCLEAR].
-5. Flag quality issues.
-6. Extract the raw patient name exactly as visible for cross-document matching.
+For this uploaded Indian health insurance claim file:
+1. Inspect every visible page/image in order.
+2. A single uploaded file may contain multiple logical documents, especially a PDF bundle containing prescription + bill + lab report + pharmacy bill.
+3. Process each logical document separately in page order.
+4. For each logical document, classify it, rate readability from 0.0 to 1.0, produce a faithful transcript, flag quality issues, and extract the raw patient name exactly as visible.
+5. Mark unclear text as [UNCLEAR].
 
 Allowed document_type values:
 - PRESCRIPTION
@@ -18,18 +17,30 @@ Allowed document_type values:
 - DISCHARGE_SUMMARY
 - UNKNOWN
 
-Return only valid JSON with exactly these keys:
+Return only valid JSON with exactly this shape:
 {
-	"document_type": "PRESCRIPTION | HOSPITAL_BILL | LAB_REPORT | PHARMACY_BILL | DENTAL_REPORT | DISCHARGE_SUMMARY | UNKNOWN",
-	"confidence": 0.0,
-	"readability": 0.0,
-	"patient_name_raw": null,
-	"quality_flags": [],
-	"transcript": "faithful visible text transcript with [UNCLEAR] markers"
+	"documents": [
+		{
+			"document_type": "PRESCRIPTION | HOSPITAL_BILL | LAB_REPORT | PHARMACY_BILL | DENTAL_REPORT | DISCHARGE_SUMMARY | UNKNOWN",
+			"confidence": 0.0,
+			"readability": 0.0,
+			"patient_name_raw": null,
+			"quality_flags": [],
+			"transcript": "faithful visible text transcript with [UNCLEAR] markers",
+			"source_file_name": null,
+			"source_page_range": null
+		}
+	]
 }
 
+If the upload contains exactly one logical document, return documents with one item.
+
+If the upload contains multiple logical documents, return one item per logical document in page order. Do not collapse them into one item.
+
+Do not merge two logical documents into one transcript. For example, if a PDF contains a prescription on page 1 and a hospital bill on page 2, return two items in the documents list in that order.
+
 Quality flags may include: HANDWRITTEN, STAMP_OVER_TEXT, LOW_CONTRAST, PARTIAL_PAGE, MULTILINGUAL, ALTERATION_MARK.
-Use visual evidence from the document. Do not infer values that are not visible. Do not summarize. Do not normalize names or dates in the transcript.
+Use visual evidence from the file. Do not infer values that are not visible. Do not summarize individual logical-document transcripts. Do not normalize names or dates in transcripts.
 """.strip()
 
 FAITHFUL_READING_PROMPT = """
