@@ -71,7 +71,6 @@ class EntityExtractionStage:
 					"hospital_name": extraction.hospital_name,
 					"line_items": [item.model_dump() for item in extraction.line_items],
 					"total_amount": extraction.total_amount,
-					"possible_exclusions": [signal.model_dump() for signal in extraction.possible_exclusions],
 					"missing_fields": extraction.missing_fields,
 					"model_used": result.model,
 					"fallback_used": result.fallback_used,
@@ -118,4 +117,4 @@ def count_extracted_fields(extraction: StructuredExtractionOutput) -> int:
 		extraction.hospital_name,
 		extraction.total_amount,
 	]
-	return sum(1 for value in scalar_fields if value) + len(extraction.line_items) + len(extraction.possible_exclusions)
+	return sum(1 for value in scalar_fields if value) + len(extraction.line_items)

@@ -40,6 +40,11 @@ def health_check():
     return {"status": "ok"}
 
 if __name__ == "__main__":
+    import argparse
     import uvicorn
 
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+    parser = argparse.ArgumentParser(description="Run the Plum Claims API server.")
+    parser.add_argument("--reload", action="store_true", help="Enable development auto-reload.")
+    args = parser.parse_args()
+
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=args.reload)

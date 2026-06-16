@@ -9,6 +9,8 @@ def configure_logging() -> None:
         level=level,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    for noisy_logger in ("watchfiles", "watchfiles.main", "watchgod", "uvicorn.supervisors"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

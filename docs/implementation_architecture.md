@@ -42,13 +42,13 @@ Next.js frontend
   -> background ingestion task
 
 Ingestion task:
-  1. VisionReaderAgent        LLM vision call, parallel per uploaded page/image
-  2. GatingAgent              deterministic document-quality gate
-  3. EntityExtractionAgent    text LLM over transcripts
-  4. AmountReconcilerAgent    deterministic amount checks
-  5. OrchestratorAgent        merge + confidence rollup
-  6. PolicyEngine             deterministic policy decision
-  7. DecisionSynthesisAgent   LLM message wording with template fallback
+  1. VisionReaderStage          LLM vision call, parallel per uploaded page/image
+  2. DocumentGatingStage        deterministic document-quality gate
+  3. EntityExtractionStage      text LLM over transcripts
+  4. AmountReconciliationStage  deterministic amount checks
+  5. ClaimMergeStage            merge + confidence rollup
+  6. PolicyEngine               deterministic policy decision
+  7. DecisionSynthesisStage     LLM message wording with template fallback
   8. Final span + decision persistence
 ```
 
@@ -166,8 +166,8 @@ LLM calls go through `backend/ai_platform`.
 Primary concepts:
 
 - `get_llm_response(...)` returns raw model text plus metadata.
-- Agents parse/validate raw output into their own Pydantic contracts.
-- Provider fallback and circuit breaker live in `ai_platform`, not inside individual agents.
+- Workflow stages parse/validate raw output into their own Pydantic contracts.
+- Provider fallback and circuit breaker live in `ai_platform`, not inside individual stages.
 
 Supported providers:
 
@@ -216,15 +216,15 @@ class DocumentVisionOutput(BaseModel):
     source_page_range: str | None
 ```
 
-For a PDF containing a prescription on page 1 and a hospital bill on page 2, the model returns two items in `documents`. `VisionReaderAgent` flattens logical documents across uploads before gating.
+For a PDF containing a prescription on page 1 and a hospital bill on page 2, the model returns two items in `documents`. `VisionReaderStage` flattens logical documents across uploads before gating.
 
 `source_page_range` accepts model outputs like `[1]` and coerces them to strings such as `"1"`.
 
 ---
 
-## 10. Agent Responsibilities
+## 10. Workflow Stage Responsibilities
 
-### VisionReaderAgent
+### VisionReaderStage
 
 - Runs per uploaded page/image.
 - Uses `asyncio.gather()` for parallel classification/reading.
@@ -233,7 +233,7 @@ For a PDF containing a prescription on page 1 and a hospital bill on page 2, the
 - Parses raw LLM output into `DocumentVisionListOutput`.
 - Writes raw output into trace artifacts if validation fails.
 
-### GatingAgent
+### DocumentGatingStage
 
 - Consumes flattened `DocumentVisionOutput` rows.
 - Loads required document types from `policy_terms.json`.
@@ -242,27 +242,27 @@ For a PDF containing a prescription on page 1 and a hospital bill on page 2, the
 - Checks patient-name consistency using normalized edit distance.
 - Writes `gating_errors` and sets claim to `GATING_FAILED` on failure.
 
-### EntityExtractionAgent
+### EntityExtractionStage
 
 - Consumes transcripts from vision output.
 - Uses text LLM to produce `StructuredExtractionOutput`.
 - Extracts patient, doctor, diagnosis, date, hospital, line items, total amount, field confidences, and missing fields.
 
-### AmountReconcilerAgent
+### AmountReconciliationStage
 
 - Pure Python.
 - Compares claimed amount, extracted total, and line-item sum.
 - Emits discrepancy flags such as `TOTAL_MISMATCH` and `CLAIMED_AMOUNT_MISMATCH`.
 - Emits fraud indicators for alteration/correction signals where available.
 
-### OrchestratorAgent
+### ClaimMergeStage
 
 - Merges entity and reconciliation results.
 - Computes final extraction confidence from:
   - document confidence/readability
   - entity field confidence
   - reconciliation confidence
-  - failed-agent penalties
+  - failed-stage penalties
   - discrepancy/fraud penalties
 
 Current confidence formula:
@@ -283,7 +283,7 @@ If confidence is below `0.65`, ingestion routes to `MANUAL_REVIEW`.
 - Applies member eligibility, policy window, minimum amount, waiting periods, exclusions, coverage, dental partial filtering, pre-auth checks, fraud hook, per-claim limit, network discount, and copay.
 - Copay is read from policy config, not hardcoded.
 
-### DecisionSynthesisAgent
+### DecisionSynthesisStage
 
 - LLM writes only `member_message` and `ops_summary`.
 - It cannot change decision or amounts.

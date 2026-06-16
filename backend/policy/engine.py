@@ -162,15 +162,6 @@ class PolicyEngine:
         rules.append(RuleResult(rule_id="CONDITION_WAITING_PERIOD", outcome="PASS", reason="No active condition waiting period applies."))
 
         # ------------------------------------
-        #      policy exclusions
-        # ------------------------------------
-        exclusion_reason = high_confidence_exclusion_signal(merged_claim) or exclusion_match(merged_claim, self.policy.exclusions.conditions)
-        if exclusion_reason:
-            rules.append(RuleResult(rule_id="EXCLUSION_CHECK", outcome="FAIL", reason=f"Excluded treatment detected: {exclusion_reason}."))
-            return rejected("This treatment is excluded under the policy.", rules, merged_claim.extraction_confidence, reason_id="EXCLUDED_CONDITION")
-        rules.append(RuleResult(rule_id="EXCLUSION_CHECK", outcome="PASS", reason="No exclusion matched."))
-
-        # ------------------------------------
         #      category coverage
         # ------------------------------------
         if not category or not category.covered:
@@ -202,6 +193,19 @@ class PolicyEngine:
         if amount <= Decimal("0.00"):
             rules.append(RuleResult(rule_id="COVERED_AMOUNT", outcome="FAIL", reason="No payable covered amount remains after exclusions."))
             return rejected("No payable covered amount remains after exclusions.", rules, merged_claim.extraction_confidence, reason_id="NO_COVERED_AMOUNT")
+
+        # ------------------------------------
+        #      policy exclusions
+        # ------------------------------------
+        exclusion_reason = claim_level_exclusion_reason(
+            merged_claim=merged_claim,
+            exclusions=self.policy.exclusions.conditions,
+            partial_items=partial_items,
+        )
+        if exclusion_reason:
+            rules.append(RuleResult(rule_id="EXCLUSION_CHECK", outcome="FAIL", reason=f"Excluded treatment detected: {exclusion_reason}."))
+            return rejected("This treatment is excluded under the policy.", rules, merged_claim.extraction_confidence, reason_id="EXCLUDED_CONDITION")
+        rules.append(RuleResult(rule_id="EXCLUSION_CHECK", outcome="PASS", reason="No claim-level exclusion matched."))
 
         # ------------------------------------
         #      pre-authorization
@@ -368,11 +372,15 @@ def exclusion_match(merged_claim: MergedClaimResult, exclusions: list[str]) -> s
     return None
 
 
-def high_confidence_exclusion_signal(merged_claim: MergedClaimResult, threshold: float = 0.85) -> str | None:
-    for signal in merged_claim.possible_exclusions:
-        if signal.confidence >= threshold:
-            return signal.exclusion
-    return None
+def claim_level_exclusion_reason(
+    *,
+    merged_claim: MergedClaimResult,
+    exclusions: list[str],
+    partial_items: list[LineItemDecision] | None,
+) -> str | None:
+    if partial_items and has_rejected_items(partial_items):
+        return None
+    return exclusion_match(merged_claim, exclusions)
 
 
 def pre_auth_missing(claim_category: str, merged_claim: MergedClaimResult, amount: Decimal, category) -> bool:
@@ -397,10 +405,12 @@ def category_line_item_decisions(merged_claim: MergedClaimResult, *, covered: li
         excluded_match = next((term for term in excluded if term.lower() in description_lower), None)
         covered_match = next((term for term in covered if term.lower() in description_lower), None)
         if excluded_match:
-            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="REJECTED", reason=f"Excluded {category_label} item: {excluded_match}"))
+            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="REJECTED", reason=item.coverage_reason or f"Excluded {category_label} item: {excluded_match}"))
+        elif item.coverage_hint == "EXCLUDED":
+            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="REJECTED", reason=item.coverage_reason or f"Extracted as excluded {category_label} item."))
         elif covered_match or item.coverage_hint == "COVERED":
             approved_total += amount
-            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="APPROVED", reason=f"Covered {category_label} item."))
+            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="APPROVED", reason=item.coverage_reason or f"Covered {category_label} item."))
         else:
             approved_total += amount
             decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="APPROVED", reason=f"No {category_label} exclusion matched."))

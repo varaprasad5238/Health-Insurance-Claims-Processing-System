@@ -69,12 +69,9 @@ Return only valid JSON with exactly these keys:
 	"treatment_date": null,
 	"hospital_name": null,
 	"line_items": [
-		{"description": "", "amount": "0.00", "coverage_hint": "COVERED | EXCLUDED | UNCERTAIN"}
+		{"description": "", "amount": "0.00", "coverage_hint": "COVERED | EXCLUDED | UNCERTAIN", "coverage_reason": null}
 	],
 	"total_amount": null,
-	"possible_exclusions": [
-		{"exclusion": "policy exclusion name", "evidence": "visible text evidence", "confidence": 0.0}
-	],
 	"field_confidences": {"field_name": 0.0},
 	"missing_fields": []
 }
@@ -84,9 +81,10 @@ Rules:
 - If a value is absent or [UNCLEAR], return null and add the field name to missing_fields.
 - Keep amounts as strings with two decimals when visible.
 - Use ISO date format YYYY-MM-DD when the date is clear; otherwise null.
-- Use the supplied policy_exclusions list only to identify possible semantic exclusion signals.
-- If diagnosis, treatment, or bill items appear related to a policy exclusion, add a possible_exclusions item with the exact policy exclusion name, visible evidence, and confidence.
-- If no exclusion signal is visible, return possible_exclusions as an empty list.
+- For each line item, compare the item description and document context against the supplied policy_exclusions list.
+- If a line item semantically matches an exclusion, set coverage_hint to EXCLUDED and explain the matched exclusion in coverage_reason.
+- If a line item is clearly payable from the visible document context, set coverage_hint to COVERED and explain briefly in coverage_reason.
+- If coverage is unclear, set coverage_hint to UNCERTAIN and explain why in coverage_reason.
 - Do not invent ICD codes or policy decisions.
 - Do not approve or reject the claim.
 """.strip()

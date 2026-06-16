@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 from backend.workflow.reconciler import AmountReconciliationResult
-from backend.ai_platform.schemas import DocumentVisionOutput, ExclusionSignalOutput, LineItemOutput, StructuredExtractionOutput
+from backend.ai_platform.schemas import DocumentVisionOutput, LineItemOutput, StructuredExtractionOutput
 from backend.logging_config import get_logger
 from backend.tracing.store import TraceStore
 
@@ -23,7 +23,6 @@ class MergedClaimResult(BaseModel):
 	hospital_name: str | None = None
 	line_items: list[LineItemOutput] = Field(default_factory=list)
 	extracted_total_amount: str | None = None
-	possible_exclusions: list[ExclusionSignalOutput] = Field(default_factory=list)
 	claimed_amount: str
 	payable_basis_amount: str
 	extraction_confidence: float
@@ -85,7 +84,6 @@ class ClaimMergeStage:
 					"patient_name": result.patient_name,
 					"diagnosis_primary": result.diagnosis_primary,
 					"payable_basis_amount": result.payable_basis_amount,
-					"possible_exclusions": [signal.model_dump() for signal in result.possible_exclusions],
 					"discrepancies": len(result.discrepancy_flags),
 					"fraud_indicators": len(result.fraud_indicators),
 					"document_confidence": result.document_confidence,
@@ -162,7 +160,6 @@ class ClaimMergeStage:
 			hospital_name=extraction.hospital_name,
 			line_items=extraction.line_items,
 			extracted_total_amount=extraction.total_amount,
-			possible_exclusions=extraction.possible_exclusions,
 			claimed_amount=reconciliation.claimed_amount,
 			payable_basis_amount=reconciliation.payable_basis_amount,
 			extraction_confidence=confidence,
