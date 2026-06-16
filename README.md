@@ -8,6 +8,40 @@ The fully functional deployed application is available at:
 
 https://main.d3lqcxg9qxiznv.amplifyapp.com/
 
+## Explore the App
+
+Use the deployed app to walk through the full claims workflow:
+
+1. **Home dashboard**
+	- Start at the landing dashboard to see recent claim activity and quick navigation.
+	- Use it as the entry point for submitting claims, reviewing claims, running test cases, and inspecting LLM metrics.
+
+2. **Submit Claim**
+	- Open `/submit` to create a new OPD claim.
+	- Select member/category details, add treatment and amount information, and upload supporting documents.
+	- Submitted claims enter the backend processing pipeline automatically.
+
+3. **Claims List**
+	- Open `/claims` to view all submitted claims.
+	- Filter or scan by status, claim category, date, member, approved amount, and confidence score.
+	- Select any claim to inspect its decision details.
+
+4. **Claim Detail and Trace View**
+	- Open a claim detail page from the claims list.
+	- Review the claim status, final decision, approved amount, rejection reasons, member message, and operations summary.
+	- Expand the trace timeline to see each processing stage: vision reading, gating, entity extraction, reconciliation, orchestration, policy engine, decision synthesis, and finalization.
+	- Each trace span includes inputs, outputs, status, elapsed time, confidence deltas, errors, and model metadata when available.
+
+5. **Test Suite Runner**
+	- Open `/test-suite` to run assignment test cases through the same API path as normal claims.
+	- Each test case creates a real claim, runs the ingestion pipeline, and can be opened afterward in the claim detail view.
+	- Use this page to demonstrate wrong document type, unreadable documents, patient mismatch, waiting periods, exclusions, partial approvals, fraud/manual-review routing, and network-discount/copay behavior.
+
+6. **LLM Metrics**
+	- Open `/llm-metrics` to inspect LLM usage and reliability.
+	- Review total calls, success/failure counts, fallback rate, average latency, token usage, provider distribution, agent distribution, and recent LLM calls.
+	- This page helps explain observability around model usage, fallback behavior, and operational cost signals.
+
 ## Project Structure
 
 ```text
