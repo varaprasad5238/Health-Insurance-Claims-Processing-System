@@ -1,4 +1,4 @@
-from backend.agents.orchestrator import MergedClaimResult
+from backend.workflow.orchestrator import MergedClaimResult
 from backend.ai_platform.llm import get_llm_platform, parse_model_json
 from backend.ai_platform.prompts import DECISION_SYNTHESIS_PROMPT
 from backend.ai_platform.schemas import DecisionMessageOutput
@@ -9,7 +9,7 @@ from backend.tracing.store import TraceStore
 logger = get_logger(__name__)
 
 
-class DecisionSynthesisAgent:
+class DecisionSynthesisStage:
 	agent_name = "decision_synthesis"
 	stage_order = 7
 	model_used = "llm-platform"

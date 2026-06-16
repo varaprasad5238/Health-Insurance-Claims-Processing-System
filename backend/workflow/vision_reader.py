@@ -12,7 +12,7 @@ from backend.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-class VisionReaderAgent:
+class VisionReaderStage:
 	stage_order = 1
 	model_used = "vision-platform"
 	max_documents = 4

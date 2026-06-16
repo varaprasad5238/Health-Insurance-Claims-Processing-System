@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
-from backend.agents.reconciler import AmountReconciliationResult
-from backend.ai_platform.schemas import DocumentVisionOutput, LineItemOutput, StructuredExtractionOutput
+from backend.workflow.reconciler import AmountReconciliationResult
+from backend.ai_platform.schemas import DocumentVisionOutput, ExclusionSignalOutput, LineItemOutput, StructuredExtractionOutput
 from backend.logging_config import get_logger
 from backend.tracing.store import TraceStore
 
@@ -23,10 +23,12 @@ class MergedClaimResult(BaseModel):
 	hospital_name: str | None = None
 	line_items: list[LineItemOutput] = Field(default_factory=list)
 	extracted_total_amount: str | None = None
+	possible_exclusions: list[ExclusionSignalOutput] = Field(default_factory=list)
 	claimed_amount: str
 	payable_basis_amount: str
 	extraction_confidence: float
 	failed_agents: list[str] = Field(default_factory=list)
+	failed_stages: list[str] = Field(default_factory=list)
 	conflict_log: list[ConflictEntry] = Field(default_factory=list)
 	discrepancy_flags: list[dict] = Field(default_factory=list)
 	fraud_indicators: list[dict] = Field(default_factory=list)
@@ -35,7 +37,7 @@ class MergedClaimResult(BaseModel):
 	reconciliation_confidence: float | None = None
 
 
-class OrchestratorAgent:
+class ClaimMergeStage:
 	agent_name = "orchestrator"
 	stage_order = 5
 
@@ -61,6 +63,7 @@ class OrchestratorAgent:
 				"discrepancies": len(reconciliation.discrepancy_flags),
 				"fraud_indicators": len(reconciliation.fraud_indicators),
 				"failed_agents": failed_agents or [],
+				"failed_stages": failed_agents or [],
 			},
 			current_stage=self.agent_name,
 		)
@@ -77,10 +80,12 @@ class OrchestratorAgent:
 				output_summary={
 					"merged_confidence": result.extraction_confidence,
 					"failed_agents": result.failed_agents,
+					"failed_stages": result.failed_stages,
 					"conflicts_resolved": len(result.conflict_log),
 					"patient_name": result.patient_name,
 					"diagnosis_primary": result.diagnosis_primary,
 					"payable_basis_amount": result.payable_basis_amount,
+					"possible_exclusions": [signal.model_dump() for signal in result.possible_exclusions],
 					"discrepancies": len(result.discrepancy_flags),
 					"fraud_indicators": len(result.fraud_indicators),
 					"document_confidence": result.document_confidence,
@@ -92,11 +97,11 @@ class OrchestratorAgent:
 				current_stage=None,
 			)
 			logger.info(
-				"Orchestration completed: claim_id=%s confidence=%s conflicts=%s failed_agents=%s",
+				"Orchestration completed: claim_id=%s confidence=%s conflicts=%s failed_stages=%s",
 				claim_id,
 				result.extraction_confidence,
 				len(result.conflict_log),
-				len(result.failed_agents),
+				len(result.failed_stages),
 			)
 			return result
 		except Exception as exc:
@@ -157,10 +162,12 @@ class OrchestratorAgent:
 			hospital_name=extraction.hospital_name,
 			line_items=extraction.line_items,
 			extracted_total_amount=extraction.total_amount,
+			possible_exclusions=extraction.possible_exclusions,
 			claimed_amount=reconciliation.claimed_amount,
 			payable_basis_amount=reconciliation.payable_basis_amount,
 			extraction_confidence=confidence,
 			failed_agents=failed_agents,
+			failed_stages=failed_agents,
 			conflict_log=conflict_log,
 			discrepancy_flags=discrepancy_flags,
 			fraud_indicators=fraud_indicators,
@@ -209,7 +216,7 @@ def compute_entity_confidence(field_confidences: dict[str, float]) -> float:
 		if field in field_confidences:
 			weighted_total += field_confidences[field] * weight
 			weight_sum += weight
-	return round(weighted_total / weight_sum, 3) if weight_sum else 0.75
+	return round(weighted_total / weight_sum, 3) if weight_sum else 0.0
 
 
 def compute_reconciliation_confidence(*, discrepancy_count: int, fraud_indicator_count: int) -> float:

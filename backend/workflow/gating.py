@@ -35,7 +35,7 @@ class GatingFailed(BaseModel):
 GatingOutcome = GatingPassed | GatingFailed
 
 
-class GatingAgent:
+class DocumentGatingStage:
 	agent_name = "gating"
 	stage_order = 2
 

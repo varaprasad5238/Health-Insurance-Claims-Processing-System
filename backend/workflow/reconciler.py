@@ -34,7 +34,7 @@ class AmountReconciliationResult(BaseModel):
 	agent_status: str = "SUCCESS"
 
 
-class AmountReconcilerAgent:
+class AmountReconciliationStage:
 	agent_name = "amount_reconciler"
 	stage_order = 4
 

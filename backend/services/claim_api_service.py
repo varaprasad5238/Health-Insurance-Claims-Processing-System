@@ -133,6 +133,7 @@ async def get_recent_llm_metrics(db: AsyncSession, *, limit: int) -> dict[str, A
                 "metric_id": metric.metric_id,
                 "claim_id": metric.claim_id,
                 "agent_name": normalize_agent_name(metric.agent_name),
+                "stage_name": normalize_agent_name(metric.agent_name),
                 "provider": metric.provider,
                 "model": metric.model,
                 "is_fallback": metric.is_fallback == "true",
@@ -410,6 +411,7 @@ async def get_claim_status(*, claim_id: str, db: AsyncSession) -> dict[str, Any]
             {
                 "span_id": span.span_id,
                 "agent_name": span.agent_name,
+                "stage_name": span.agent_name,
                 "stage_order": span.stage_order,
                 "status": span.status,
                 "elapsed_ms": span.elapsed_ms,

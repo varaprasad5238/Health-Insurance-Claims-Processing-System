@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from backend.agents.orchestrator import MergedClaimResult
+from backend.workflow.orchestrator import MergedClaimResult
 from backend.models.policy import Policy, PolicyMember
 from backend.policy.loader import get_policy
 from backend.tracing.store import TraceStore
@@ -115,21 +115,33 @@ class PolicyEngine:
         amount = parse_money(merged_claim.payable_basis_amount)
         member = find_member(self.policy, member_id)
 
+        # ------------------------------------
+        #      member eligibility
+        # ------------------------------------
         if not member:
             rules.append(RuleResult(rule_id="MEMBER_ELIGIBILITY", outcome="FAIL", reason=f"Member {member_id} is not in roster."))
             return rejected("Member is not eligible under this policy.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="MEMBER_ELIGIBILITY", outcome="PASS", reason="Member exists in policy roster."))
 
+        # ------------------------------------
+        #      policy active date check
+        # ------------------------------------
         if not is_date_between(treatment, self.policy.policy_holder.policy_start_date, self.policy.policy_holder.policy_end_date):
             rules.append(RuleResult(rule_id="POLICY_ACTIVE", outcome="FAIL", reason="Treatment date is outside policy period."))
             return rejected("Treatment date is outside the active policy period.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="POLICY_ACTIVE", outcome="PASS", reason="Treatment date is within policy period."))
 
+        # ------------------------------------
+        #      minimum claim amount
+        # ------------------------------------
         if amount < Decimal(str(self.policy.submission_rules.minimum_claim_amount)):
             rules.append(RuleResult(rule_id="MINIMUM_CLAIM_AMOUNT", outcome="FAIL", reason="Claim amount is below minimum."))
             return rejected("Claim amount is below the minimum allowed amount.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="MINIMUM_CLAIM_AMOUNT", outcome="PASS", reason="Claim amount meets minimum threshold."))
 
+        # ------------------------------------
+        #      initial waiting period
+        # ------------------------------------
         join_date = parse_date(member.join_date or self.policy.policy_holder.policy_start_date)
         initial_eligible_date = join_date + timedelta(days=self.policy.waiting_periods.initial_waiting_period_days)
         if treatment < initial_eligible_date:
@@ -137,6 +149,9 @@ class PolicyEngine:
             return rejected(f"Initial waiting period applies until {initial_eligible_date.isoformat()}.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="INITIAL_WAITING_PERIOD", outcome="PASS", reason="Initial waiting period completed."))
 
+        # ------------------------------------
+        #      condition waiting period
+        # ------------------------------------
         specific_wait = specific_waiting_period(merged_claim.diagnosis_primary or "", self.policy.waiting_periods.specific_conditions)
         if specific_wait:
             condition, days = specific_wait
@@ -146,17 +161,26 @@ class PolicyEngine:
                 return rejected(f"{condition.title()} related claims are eligible from {eligible_date.isoformat()}.", rules, merged_claim.extraction_confidence, reason_id="WAITING_PERIOD")
         rules.append(RuleResult(rule_id="CONDITION_WAITING_PERIOD", outcome="PASS", reason="No active condition waiting period applies."))
 
-        exclusion_reason = exclusion_match(merged_claim, self.policy.exclusions.conditions)
+        # ------------------------------------
+        #      policy exclusions
+        # ------------------------------------
+        exclusion_reason = high_confidence_exclusion_signal(merged_claim) or exclusion_match(merged_claim, self.policy.exclusions.conditions)
         if exclusion_reason:
             rules.append(RuleResult(rule_id="EXCLUSION_CHECK", outcome="FAIL", reason=f"Excluded treatment detected: {exclusion_reason}."))
             return rejected("This treatment is excluded under the policy.", rules, merged_claim.extraction_confidence, reason_id="EXCLUDED_CONDITION")
         rules.append(RuleResult(rule_id="EXCLUSION_CHECK", outcome="PASS", reason="No exclusion matched."))
 
+        # ------------------------------------
+        #      category coverage
+        # ------------------------------------
         if not category or not category.covered:
             rules.append(RuleResult(rule_id="COVERAGE_CATEGORY", outcome="FAIL", reason=f"Category {claim_category} is not covered."))
             return rejected("Claim category is not covered under this policy.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="COVERAGE_CATEGORY", outcome="PASS", reason="Claim category is covered."))
 
+        # ------------------------------------
+        #      category line item filtering
+        # ------------------------------------
         partial_items: list[LineItemDecision] | None = None
         if claim_category == "DENTAL":
             partial_items, amount = dental_line_item_decisions(merged_claim, category.covered_procedures or [], category.excluded_procedures or [])
@@ -172,20 +196,32 @@ class PolicyEngine:
         else:
             rules.append(RuleResult(rule_id="DENTAL_LINE_ITEM_FILTER", outcome="SKIP", reason="Not a dental claim."))
 
+        # ------------------------------------
+        #      covered payable amount
+        # ------------------------------------
         if amount <= Decimal("0.00"):
             rules.append(RuleResult(rule_id="COVERED_AMOUNT", outcome="FAIL", reason="No payable covered amount remains after exclusions."))
             return rejected("No payable covered amount remains after exclusions.", rules, merged_claim.extraction_confidence, reason_id="NO_COVERED_AMOUNT")
 
+        # ------------------------------------
+        #      pre-authorization
+        # ------------------------------------
         if pre_auth_missing(claim_category, merged_claim, amount, category):
             rules.append(RuleResult(rule_id="PRE_AUTH_CHECK", outcome="FAIL", reason="Pre-authorization required but missing."))
             return rejected("Pre-authorization was required for this claim and was not provided.", rules, merged_claim.extraction_confidence, reason_id="PRE_AUTH_MISSING")
         rules.append(RuleResult(rule_id="PRE_AUTH_CHECK", outcome="PASS", reason="No missing pre-authorization detected."))
 
+        # ------------------------------------
+        #      fraud signal checks
+        # ------------------------------------
         if same_day_claim_count > self.policy.fraud_thresholds.same_day_claims_limit:
             rules.append(RuleResult(rule_id="FRAUD_SIGNAL_CHECK", outcome="FAIL", reason="Same-day claim threshold exceeded."))
             return manual_review("Unusual same-day claim pattern detected.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="FRAUD_SIGNAL_CHECK", outcome="PASS", reason="No fraud threshold breach."))
 
+        # ------------------------------------
+        #      benefit cap
+        # ------------------------------------
         cap_amount, cap_source = benefit_cap_for_category(category, self.policy.coverage.per_claim_limit)
         if amount > cap_amount:
             rules.append(
@@ -204,6 +240,9 @@ class PolicyEngine:
         else:
             rules.append(RuleResult(rule_id="BENEFIT_CAP", outcome="PASS", reason=f"Payable amount is within {cap_source} cap {money(cap_amount)}.", metadata={"cap_source": cap_source, "cap_amount": money(cap_amount)}))
 
+        # ------------------------------------
+        #      annual OPD limit
+        # ------------------------------------
         if ytd_claims_amount and str(ytd_claims_amount).strip():
             ytd_amount = parse_money(ytd_claims_amount)
             annual_limit = Decimal(str(self.policy.coverage.annual_opd_limit))
@@ -246,6 +285,9 @@ class PolicyEngine:
         else:
             rules.append(RuleResult(rule_id="ANNUAL_LIMIT", outcome="SKIP", reason="YTD amount not provided."))
 
+        # ------------------------------------
+        #      network hospital discount
+        # ------------------------------------
         network_discount = Decimal("0.00")
         if merged_claim.hospital_name and is_network_hospital(merged_claim.hospital_name, self.policy.network_hospitals):
             network_discount = amount * Decimal(str(category.network_discount_percent or 0)) / Decimal("100")
@@ -254,6 +296,9 @@ class PolicyEngine:
         else:
             rules.append(RuleResult(rule_id="NETWORK_DISCOUNT", outcome="SKIP", reason="No network hospital discount applied."))
 
+        # ------------------------------------
+        #      copay and final decision
+        # ------------------------------------
         copay = amount * Decimal(str(category.copay_percent or 0)) / Decimal("100")
         approved = amount - copay
         rules.append(RuleResult(rule_id="COPAY_APPLICATION", outcome="PASS", reason="Copay applied.", approved_amount=money(approved), deducted_amount=money(copay), deduction_reason="COPAY"))
@@ -320,6 +365,13 @@ def exclusion_match(merged_claim: MergedClaimResult, exclusions: list[str]) -> s
             terms.extend(["obesity", "bariatric", "weight loss"])
         if any(term in haystack for term in terms):
             return exclusion
+    return None
+
+
+def high_confidence_exclusion_signal(merged_claim: MergedClaimResult, threshold: float = 0.85) -> str | None:
+    for signal in merged_claim.possible_exclusions:
+        if signal.confidence >= threshold:
+            return signal.exclusion
     return None
 
 

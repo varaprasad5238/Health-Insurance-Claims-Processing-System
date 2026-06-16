@@ -61,6 +61,7 @@ class LLMMetricRecentItem(BaseModel):
     metric_id: str
     claim_id: str | None = None
     agent_name: str
+    stage_name: str | None = None
     provider: str
     model: str
     is_fallback: bool
@@ -144,6 +145,7 @@ class ClaimsListResponse(BaseModel):
 class TraceSpanDTO(BaseModel):
     span_id: str
     agent_name: str
+    stage_name: str | None = None
     stage_order: int
     status: str
     elapsed_ms: int | None = None

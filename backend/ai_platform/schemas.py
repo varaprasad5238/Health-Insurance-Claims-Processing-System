@@ -58,6 +58,12 @@ class LineItemOutput(BaseModel):
     coverage_hint: Literal["COVERED", "EXCLUDED", "UNCERTAIN"] = "UNCERTAIN"
 
 
+class ExclusionSignalOutput(BaseModel):
+    exclusion: str
+    evidence: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class StructuredExtractionOutput(BaseModel):
     patient_name: str | None = None
     doctor_name: str | None = None
@@ -67,6 +73,7 @@ class StructuredExtractionOutput(BaseModel):
     hospital_name: str | None = None
     line_items: list[LineItemOutput] = Field(default_factory=list)
     total_amount: str | None = None
+    possible_exclusions: list[ExclusionSignalOutput] = Field(default_factory=list)
     field_confidences: dict[str, float] = Field(default_factory=dict)
     missing_fields: list[str] = Field(default_factory=list)
 

@@ -35,6 +35,7 @@ type LLMMetric = {
   metric_id: string;
   claim_id: string | null;
   agent_name: string;
+  stage_name?: string | null;
   provider: string;
   model: string;
   is_fallback: boolean;
@@ -95,7 +96,7 @@ export default function LLMMetricsPage() {
   }, []);
 
   const maxProvider = useMemo(() => Math.max(1, ...Object.values(summary.by_provider)), [summary.by_provider]);
-  const maxAgent = useMemo(() => Math.max(1, ...Object.values(summary.by_agent)), [summary.by_agent]);
+  const maxStage = useMemo(() => Math.max(1, ...Object.values(summary.by_agent)), [summary.by_agent]);
   const totalTokenDenominator = Math.max(summary.total_tokens, 1);
 
   return (
@@ -131,12 +132,12 @@ export default function LLMMetricsPage() {
 
         <section className="grid gap-5 lg:grid-cols-2">
           <ChartCard title="Calls by Provider" data={summary.by_provider} max={maxProvider} />
-          <ChartCard title="Calls by Agent" data={summary.by_agent} max={maxAgent} />
+          <ChartCard title="Calls by Stage" data={summary.by_agent} max={maxStage} />
         </section>
 
         <section className="grid gap-5 lg:grid-cols-2">
           <TokenChartCard title="Tokens by Provider" data={summary.tokens_by_provider} />
-          <TokenChartCard title="Tokens by Agent" data={summary.tokens_by_agent} />
+          <TokenChartCard title="Tokens by Stage" data={summary.tokens_by_agent} />
         </section>
 
         <section className="glass-panel rounded-[24px] p-5">
@@ -150,7 +151,7 @@ export default function LLMMetricsPage() {
           <div className="overflow-hidden rounded-2xl border hairline">
             <div className="hidden grid-cols-[1fr_0.8fr_0.9fr_0.7fr_0.7fr_0.7fr_0.7fr] gap-3 bg-[var(--surface-muted)] px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-muted md:grid">
               <div>Claim</div>
-              <div>Agent</div>
+              <div>Stage</div>
               <div>Provider</div>
               <div>Status</div>
               <div>Input</div>
@@ -161,7 +162,7 @@ export default function LLMMetricsPage() {
             {metrics.map((metric) => (
               <div key={metric.metric_id} className="grid gap-3 border-t hairline px-4 py-4 md:grid-cols-[1fr_0.8fr_0.9fr_0.7fr_0.7fr_0.7fr_0.7fr] md:items-center">
                 <div className="min-w-0 text-sm font-bold">{metric.claim_id ?? "-"}</div>
-                <div className="text-sm text-muted">{metric.agent_name}</div>
+                <div className="text-sm text-muted">{metric.stage_name ?? metric.agent_name}</div>
                 <div className="text-sm text-muted">{metric.provider}:{metric.model}</div>
                 <div><span className={`status-pill ${metric.status === "SUCCESS" ? "text-[var(--success)]" : "text-[var(--danger)]"}`}>{metric.status}</span></div>
                 <div className="text-sm text-muted">{formatTokens(metric.input_tokens)}</div>

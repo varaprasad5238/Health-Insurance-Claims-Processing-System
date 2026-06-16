@@ -10,6 +10,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 type Span = {
   span_id: string;
   agent_name: string;
+  stage_name?: string;
   stage_order: number;
   status: string;
   elapsed_ms: number | null;
@@ -251,7 +252,7 @@ function PipelineRow({ label, span, isPending }: { label: string; span?: Span; i
       case "gating": return `Required docs present · passed`;
       case "entity_extraction": return `${s.fields_extracted} fields extracted · confidence ${s.confidence}`;
       case "amount_reconciler": return `${s.discrepancies} discrepancy(ies) · ${s.fraud_indicators} fraud indicator(s)`;
-      case "orchestrator": return `Merged confidence ${s.merged_confidence} · ${s.failed_agents?.length || 0} failed agent(s)`;
+      case "orchestrator": return `Merged confidence ${s.merged_confidence} · ${s.failed_stages?.length ?? s.failed_agents?.length ?? 0} failed stage(s)`;
       case "policy_engine": return `${s.rules_evaluated} rules evaluated · ${s.rules_failed} failed · ${s.rules_skipped} skipped`;
       case "decision_synthesis": return `Decision: ${s.decision} · Approved ₹${s.approved_amount}`;
       case "final": return `Claim ${s.decision}`;

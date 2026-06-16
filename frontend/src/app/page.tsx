@@ -18,7 +18,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 const metrics = [
   { label: "Claims Ready", value: "12", note: "assignment cases mapped" },
   { label: "Policy Rules", value: "14", note: "deterministic checks" },
-  { label: "Trace Coverage", value: "100%", note: "agent spans visible" },
+  { label: "Trace Coverage", value: "100%", note: "stage spans visible" },
 ];
 
 const workflow = [

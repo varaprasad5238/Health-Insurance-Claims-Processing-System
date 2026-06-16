@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
-from backend.agents.decision import DecisionSynthesisAgent
-from backend.agents.entity import EntityExtractionAgent
-from backend.agents.gating import GatingAgent
-from backend.agents.orchestrator import OrchestratorAgent
-from backend.agents.reconciler import AmountReconcilerAgent
-from backend.agents.vision_reader import VisionReaderAgent
+from backend.workflow.decision import DecisionSynthesisStage
+from backend.workflow.entity import EntityExtractionStage
+from backend.workflow.gating import DocumentGatingStage
+from backend.workflow.orchestrator import ClaimMergeStage
+from backend.workflow.reconciler import AmountReconciliationStage
+from backend.workflow.vision_reader import VisionReaderStage
 from backend.ai_platform.schemas import DocumentVisionOutput
 from backend.database.connection import AsyncSessionLocal
 from backend.database.models import ClaimDecisionModel
@@ -104,13 +104,13 @@ async def run_claim_ingestion(
     # ------------------------------------
     #      initialize pipeline state
     # ------------------------------------
-    vision_reader = VisionReaderAgent()
-    gating_agent = GatingAgent()
-    entity_agent = EntityExtractionAgent()
-    reconciler_agent = AmountReconcilerAgent()
-    orchestrator_agent = OrchestratorAgent()
+    vision_reader = VisionReaderStage()
+    gating_stage = DocumentGatingStage()
+    entity_stage = EntityExtractionStage()
+    reconciliation_stage = AmountReconciliationStage()
+    merge_stage = ClaimMergeStage()
     policy_engine = PolicyEngine()
-    decision_agent = DecisionSynthesisAgent()
+    decision_stage = DecisionSynthesisStage()
 
     # ------------------------------------
     #      vision document reading
@@ -129,7 +129,7 @@ async def run_claim_ingestion(
     # ------------------------------------
     #      document gating
     # ------------------------------------
-    gating_result = await gating_agent.run(
+    gating_result = await gating_stage.run(
         claim_id=claim_id,
         claim_category=claim_category,
         documents=classified_documents,
@@ -143,7 +143,7 @@ async def run_claim_ingestion(
     #      entity extraction
     # ------------------------------------
     try:
-        extraction = await entity_agent.extract(
+        extraction = await entity_stage.extract(
             claim_id=claim_id,
             claim_category=claim_category,
             documents=classified_documents,
@@ -157,7 +157,7 @@ async def run_claim_ingestion(
     #      amount reconciliation
     # ------------------------------------
     try:
-        reconciliation = await reconciler_agent.reconcile(
+        reconciliation = await reconciliation_stage.reconcile(
             claim_id=claim_id,
             claimed_amount=claimed_amount,
             extraction=extraction,
@@ -171,7 +171,7 @@ async def run_claim_ingestion(
     #      orchestration and confidence
     # ------------------------------------
     try:
-        merged_claim = await orchestrator_agent.merge(
+        merged_claim = await merge_stage.merge(
             claim_id=claim_id,
             documents=classified_documents,
             extraction=extraction,
@@ -214,7 +214,7 @@ async def run_claim_ingestion(
     # ------------------------------------
     #      decision synthesis
     # ------------------------------------
-    policy_decision = await decision_agent.synthesize(
+    policy_decision = await decision_stage.synthesize(
         claim_id=claim_id,
         policy_decision=policy_decision,
         merged_claim=merged_claim,

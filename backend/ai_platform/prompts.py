@@ -72,6 +72,9 @@ Return only valid JSON with exactly these keys:
 		{"description": "", "amount": "0.00", "coverage_hint": "COVERED | EXCLUDED | UNCERTAIN"}
 	],
 	"total_amount": null,
+	"possible_exclusions": [
+		{"exclusion": "policy exclusion name", "evidence": "visible text evidence", "confidence": 0.0}
+	],
 	"field_confidences": {"field_name": 0.0},
 	"missing_fields": []
 }
@@ -81,7 +84,11 @@ Rules:
 - If a value is absent or [UNCLEAR], return null and add the field name to missing_fields.
 - Keep amounts as strings with two decimals when visible.
 - Use ISO date format YYYY-MM-DD when the date is clear; otherwise null.
+- Use the supplied policy_exclusions list only to identify possible semantic exclusion signals.
+- If diagnosis, treatment, or bill items appear related to a policy exclusion, add a possible_exclusions item with the exact policy exclusion name, visible evidence, and confidence.
+- If no exclusion signal is visible, return possible_exclusions as an empty list.
 - Do not invent ICD codes or policy decisions.
+- Do not approve or reject the claim.
 """.strip()
 
 DECISION_SYNTHESIS_PROMPT = """

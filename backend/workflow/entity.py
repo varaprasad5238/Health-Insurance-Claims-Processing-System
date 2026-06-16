@@ -5,12 +5,13 @@ from backend.ai_platform.llm import get_llm_platform, parse_model_json
 from backend.ai_platform.prompts import STRUCTURED_EXTRACTION_PROMPT
 from backend.ai_platform.schemas import DocumentVisionOutput, StructuredExtractionOutput
 from backend.logging_config import get_logger
+from backend.policy.loader import get_policy
 from backend.tracing.store import TraceStore
 
 logger = get_logger(__name__)
 
 
-class EntityExtractionAgent:
+class EntityExtractionStage:
 	agent_name = "entity_extraction"
 	stage_order = 3
 	model_used = "llm-platform"
@@ -50,6 +51,7 @@ class EntityExtractionAgent:
 				context={
 					"task": "structured_extraction",
 					"claim_category": claim_category,
+					"policy_exclusions": get_policy().exclusions.conditions,
 					"documents": [document.model_dump() for document in documents],
 				},
 				claim_id=claim_id,
@@ -69,6 +71,7 @@ class EntityExtractionAgent:
 					"hospital_name": extraction.hospital_name,
 					"line_items": [item.model_dump() for item in extraction.line_items],
 					"total_amount": extraction.total_amount,
+					"possible_exclusions": [signal.model_dump() for signal in extraction.possible_exclusions],
 					"missing_fields": extraction.missing_fields,
 					"model_used": result.model,
 					"fallback_used": result.fallback_used,
@@ -115,4 +118,4 @@ def count_extracted_fields(extraction: StructuredExtractionOutput) -> int:
 		extraction.hospital_name,
 		extraction.total_amount,
 	]
-	return sum(1 for value in scalar_fields if value) + len(extraction.line_items)
+	return sum(1 for value in scalar_fields if value) + len(extraction.line_items) + len(extraction.possible_exclusions)
