@@ -1,10 +1,17 @@
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 
-COMMON_ROOT = Path(__file__).resolve().parents[1] / "common" / "claims"
+def default_common_root() -> Path:
+    if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        return Path("/tmp/claims")
+    return Path(__file__).resolve().parents[1] / "common" / "claims"
+
+
+COMMON_ROOT = Path(os.getenv("CLAIMS_STORAGE_ROOT", str(default_common_root())))
 
 
 def claim_root(claim_id: str) -> Path:

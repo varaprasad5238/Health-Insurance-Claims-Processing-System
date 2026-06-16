@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from mangum import Mangum
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -33,11 +34,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(router)  # ← add this line
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+handler = Mangum(app)
 
 if __name__ == "__main__":
     import argparse
