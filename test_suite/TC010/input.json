@@ -1,0 +1,5 @@
+{
+  "case_id": "TC010",
+  "metadata_source": "../../assignment/test_cases.json",
+  "documents": ["documents/TC010.pdf"]
+}

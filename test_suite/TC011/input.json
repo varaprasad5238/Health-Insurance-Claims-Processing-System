@@ -1,0 +1,9 @@
+{
+  "case_id": "TC011",
+  "metadata_source": "../../assignment/test_cases.json",
+  "documents": ["documents/TC011.pdf"],
+  "test_context": {
+    "simulate_component_failure": true,
+    "simulated_failed_agent": "entity_extraction"
+  }
+}

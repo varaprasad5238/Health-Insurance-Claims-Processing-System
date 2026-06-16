@@ -23,6 +23,9 @@ type Span = {
 
 type ClaimData = {
   claim_id: string;
+  claimed_amount: string;
+  claim_category: string;
+  member_id: string;
   status: string;
   current_stage: string | null;
   updated_at: string;
@@ -336,7 +339,7 @@ function DecisionCard({ data }: { data: ClaimData }) {
         </div>
 
         <div className="muted-panel mb-4 rounded-2xl p-3 font-mono text-sm text-muted">
-          Claimed ₹1500 → Copay −₹{d.copay_deducted} → Discount −₹{d.network_discount_applied} → Approved ₹{d.approved_amount}
+          Claimed ₹{data.claimed_amount} → Copay −₹{d.copay_deducted} → Discount −₹{d.network_discount_applied} → Approved ₹{d.approved_amount}
         </div>
 
         <p className="mb-6 text-lg font-bold leading-7">{d.member_message}</p>

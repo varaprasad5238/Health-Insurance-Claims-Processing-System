@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowRight,
-  CheckCircle2,
   ClipboardCheck,
   FileSearch,
   ShieldCheck,
@@ -79,12 +78,12 @@ export default function Home() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="status-pill">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Local Demo
-              </span>
               <ThemeToggle />
               <Link href="/llm-metrics" className="secondary-button">
                 LLM Metrics
+              </Link>
+              <Link href="/test-suite" className="secondary-button">
+                Test Suite
               </Link>
               <Link href="/submit" className="primary-button">
                 New Claim <ArrowRight className="h-4 w-4" />

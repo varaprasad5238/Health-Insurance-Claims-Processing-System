@@ -128,7 +128,7 @@ Not every agent needs an LLM, and not every LLM call needs a vision model. The p
 | Agent | Needs vision? | Model | Rationale |
 |---|---|---|---|
 | Document gating agent | Yes — sees document images | Gemini 2.5 Pro | Must classify from image; shares call with vision reading agent |
-| Vision reading agent | Yes — produces transcript | Gemini 2.5 Pro | Same call as gating — returns classification + faithful transcript |
+| Vision reading agent | Yes — produces transcript | Gemini 2.5 Pro / GPT-5 | Same call as gating — returns classification + faithful transcript |
 | Entity extraction agent | No — works from transcript text | Gemini Flash / Claude Haiku | Text-only task; cheaper and faster model sufficient |
 | Amount reconciler agent | No — pure arithmetic | No LLM — Python code | Sum comparisons, discrepancy checks are deterministic |
 | Policy rule engine | No — rule evaluation | No LLM — Python code | Date arithmetic, set membership, comparisons from `policy_terms.json` |
@@ -137,8 +137,6 @@ Not every agent needs an LLM, and not every LLM call needs a vision model. The p
 
 **Total per claim: 1 vision LLM call per document + 1 text LLM call for entity extraction + 1 text LLM call for decision synthesis.**
 For a typical 2-document claim: 4 LLM calls total (2 vision + 1 text extraction + 1 text synthesis).
-
-**Why this works for multi-agent bonus:** The evaluator sees 7 agents with independent contracts, independent trace spans, and independent failure modes in the architecture document. The fact that two agents share a single API call is an implementation optimization — not an architectural collapse. Each agent can be swapped, tested, and traced independently.
 
 ---
 
@@ -752,5 +750,3 @@ The current design targets approximately 75,000 claims/year (~200/day) and runs 
 - **`trace_spans` table as single source of truth:** Used for both the live progress UI and the eval report's trace reconstruction requirement. No separate "progress" tracking mechanism is needed.
 
 ---
-
-*End of Document*

@@ -160,9 +160,21 @@ class PolicyEngine:
         partial_items: list[LineItemDecision] | None = None
         if claim_category == "DENTAL":
             partial_items, amount = dental_line_item_decisions(merged_claim, category.covered_procedures or [], category.excluded_procedures or [])
-            rules.append(RuleResult(rule_id="DENTAL_LINE_ITEM_FILTER", outcome="PARTIAL" if partial_items else "PASS", reason="Dental line items adjudicated.", approved_amount=money(amount)))
+            rules.append(RuleResult(rule_id="DENTAL_LINE_ITEM_FILTER", outcome="PARTIAL" if has_rejected_items(partial_items) else "PASS", reason="Dental line items adjudicated.", approved_amount=money(amount)))
+        elif claim_category == "VISION":
+            partial_items, amount = category_line_item_decisions(
+                merged_claim,
+                covered=category.covered_items or [],
+                excluded=category.excluded_items or [],
+                category_label="vision",
+            )
+            rules.append(RuleResult(rule_id="VISION_LINE_ITEM_FILTER", outcome="PARTIAL" if has_rejected_items(partial_items) else "PASS", reason="Vision line items adjudicated.", approved_amount=money(amount)))
         else:
             rules.append(RuleResult(rule_id="DENTAL_LINE_ITEM_FILTER", outcome="SKIP", reason="Not a dental claim."))
+
+        if amount <= Decimal("0.00"):
+            rules.append(RuleResult(rule_id="COVERED_AMOUNT", outcome="FAIL", reason="No payable covered amount remains after exclusions."))
+            return rejected("No payable covered amount remains after exclusions.", rules, merged_claim.extraction_confidence, reason_id="NO_COVERED_AMOUNT")
 
         if pre_auth_missing(claim_category, merged_claim, amount, category):
             rules.append(RuleResult(rule_id="PRE_AUTH_CHECK", outcome="FAIL", reason="Pre-authorization required but missing."))
@@ -174,12 +186,65 @@ class PolicyEngine:
             return manual_review("Unusual same-day claim pattern detected.", rules, merged_claim.extraction_confidence)
         rules.append(RuleResult(rule_id="FRAUD_SIGNAL_CHECK", outcome="PASS", reason="No fraud threshold breach."))
 
-        if claim_category != "DENTAL" and amount > Decimal(str(self.policy.coverage.per_claim_limit)):
-            rules.append(RuleResult(rule_id="PER_CLAIM_LIMIT", outcome="FAIL", reason=f"Claim amount {money(amount)} exceeds per-claim limit {self.policy.coverage.per_claim_limit}."))
-            return rejected(f"The per-claim limit is {self.policy.coverage.per_claim_limit}, but the claim amount is {money(amount)}.", rules, merged_claim.extraction_confidence, reason_id="PER_CLAIM_EXCEEDED")
-        rules.append(RuleResult(rule_id="PER_CLAIM_LIMIT", outcome="PASS", reason="Per-claim limit check passed."))
+        cap_amount, cap_source = benefit_cap_for_category(category, self.policy.coverage.per_claim_limit)
+        if amount > cap_amount:
+            rules.append(
+                RuleResult(
+                    rule_id="BENEFIT_CAP",
+                    outcome="FAIL",
+                    reason=f"Payable amount {money(amount)} exceeds {cap_source} cap {money(cap_amount)}.",
+                    approved_amount="0.00",
+                    deducted_amount=money(amount),
+                    deduction_reason=cap_source,
+                    metadata={"cap_source": cap_source, "cap_amount": money(cap_amount), "amount": money(amount)},
+                )
+            )
+            reason_id = "SUB_LIMIT_EXCEEDED" if cap_source == "SUB_LIMIT" else "PER_CLAIM_EXCEEDED"
+            return rejected(f"The payable amount {money(amount)} exceeds the {cap_source.lower().replace('_', ' ')} cap of {money(cap_amount)}.", rules, merged_claim.extraction_confidence, reason_id=reason_id)
+        else:
+            rules.append(RuleResult(rule_id="BENEFIT_CAP", outcome="PASS", reason=f"Payable amount is within {cap_source} cap {money(cap_amount)}.", metadata={"cap_source": cap_source, "cap_amount": money(cap_amount)}))
 
-        rules.append(RuleResult(rule_id="ANNUAL_LIMIT", outcome="SKIP", reason="YTD amount not provided."))
+        if ytd_claims_amount and str(ytd_claims_amount).strip():
+            ytd_amount = parse_money(ytd_claims_amount)
+            annual_limit = Decimal(str(self.policy.coverage.annual_opd_limit))
+            projected_total = ytd_amount + amount
+            if projected_total > annual_limit:
+                rules.append(
+                    RuleResult(
+                        rule_id="ANNUAL_LIMIT",
+                        outcome="FAIL",
+                        reason=(
+                            f"YTD claimed amount {money(ytd_amount)} plus current claim {money(amount)} "
+                            f"exceeds annual OPD limit {money(annual_limit)}."
+                        ),
+                        metadata={
+                            "ytd_claims_amount": money(ytd_amount),
+                            "current_claim_amount": money(amount),
+                            "projected_total": money(projected_total),
+                            "annual_opd_limit": money(annual_limit),
+                        },
+                    )
+                )
+                return rejected("Annual OPD limit would be exceeded.", rules, merged_claim.extraction_confidence, reason_id="ANNUAL_LIMIT_EXCEEDED")
+            rules.append(
+                RuleResult(
+                    rule_id="ANNUAL_LIMIT",
+                    outcome="PASS",
+                    reason=(
+                        f"YTD claimed amount {money(ytd_amount)} plus current claim {money(amount)} "
+                        f"is within annual OPD limit {money(annual_limit)}."
+                    ),
+                    metadata={
+                        "ytd_claims_amount": money(ytd_amount),
+                        "current_claim_amount": money(amount),
+                        "projected_total": money(projected_total),
+                        "annual_opd_limit": money(annual_limit),
+                        "remaining_after_claim": money(annual_limit - projected_total),
+                    },
+                )
+            )
+        else:
+            rules.append(RuleResult(rule_id="ANNUAL_LIMIT", outcome="SKIP", reason="YTD amount not provided."))
 
         network_discount = Decimal("0.00")
         if merged_claim.hospital_name and is_network_hospital(merged_claim.hospital_name, self.policy.network_hospitals):
@@ -193,7 +258,7 @@ class PolicyEngine:
         approved = amount - copay
         rules.append(RuleResult(rule_id="COPAY_APPLICATION", outcome="PASS", reason="Copay applied.", approved_amount=money(approved), deducted_amount=money(copay), deduction_reason="COPAY"))
 
-        decision = "PARTIAL" if partial_items and any(item.decision == "REJECTED" for item in partial_items) else "APPROVED"
+        decision = "PARTIAL" if has_rejected_items(partial_items) else "APPROVED"
         return PolicyDecisionResult(
             decision=decision,
             approved_amount=money(approved),
@@ -268,6 +333,10 @@ def pre_auth_missing(claim_category: str, merged_claim: MergedClaimResult, amoun
 
 
 def dental_line_item_decisions(merged_claim: MergedClaimResult, covered: list[str], excluded: list[str]) -> tuple[list[LineItemDecision], Decimal]:
+    return category_line_item_decisions(merged_claim, covered=covered, excluded=excluded, category_label="dental")
+
+
+def category_line_item_decisions(merged_claim: MergedClaimResult, *, covered: list[str], excluded: list[str], category_label: str) -> tuple[list[LineItemDecision], Decimal]:
     decisions: list[LineItemDecision] = []
     approved_total = Decimal("0.00")
     for item in merged_claim.line_items:
@@ -276,13 +345,25 @@ def dental_line_item_decisions(merged_claim: MergedClaimResult, covered: list[st
         excluded_match = next((term for term in excluded if term.lower() in description_lower), None)
         covered_match = next((term for term in covered if term.lower() in description_lower), None)
         if excluded_match:
-            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="REJECTED", reason=f"Excluded dental procedure: {excluded_match}"))
+            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="REJECTED", reason=f"Excluded {category_label} item: {excluded_match}"))
         elif covered_match or item.coverage_hint == "COVERED":
             approved_total += amount
-            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="APPROVED", reason="Covered dental procedure."))
+            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="APPROVED", reason=f"Covered {category_label} item."))
         else:
-            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="REJECTED", reason="Dental procedure not listed as covered."))
+            approved_total += amount
+            decisions.append(LineItemDecision(description=item.description, amount=money(amount), decision="APPROVED", reason=f"No {category_label} exclusion matched."))
     return decisions, approved_total
+
+
+def has_rejected_items(items: list[LineItemDecision] | None) -> bool:
+    return bool(items and any(item.decision == "REJECTED" for item in items))
+
+
+def benefit_cap_for_category(category, per_claim_limit: int) -> tuple[Decimal, str]:
+    sub_limit = getattr(category, "sub_limit", None)
+    if sub_limit is not None:
+        return Decimal(str(sub_limit)), "SUB_LIMIT"
+    return Decimal(str(per_claim_limit)), "PER_CLAIM_LIMIT"
 
 
 def is_network_hospital(hospital_name: str, network_hospitals: list[str]) -> bool:

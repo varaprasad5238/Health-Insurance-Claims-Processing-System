@@ -37,16 +37,6 @@ Fixed sequence, typed contracts, independent failure
 - One conditional skip: low confidence -> skip rules.
 - Fixed control flow means linear trace and trivial reconstruction for the ops team.
 
-### Evaluation rubric alignment
-
-| Rubric criterion | Weight | What it rewards | How this design scores |
-|---|---:|---|---|
-| System Design | 30% | Clean decomposition, clear responsibilities | 7 independent agents, typed contracts |
-| Observability | 20% | Full decision reconstruction from trace | Linear span sequence, one span per agent |
-| Engineering Quality | 25% | Error handling, data modeling, async | Pydantic contracts, timeout-wrapped agents, async extraction |
-| AI Integration | 15% | Thoughtful, precise LLM use | LLM only where it adds value; code for deterministic tasks |
-| Document Verification | 10% | Early detection, specific error messages | Synchronous gating gate before any extraction |
-
 ---
 
 ## Phase 2 - LLM Call Optimisation

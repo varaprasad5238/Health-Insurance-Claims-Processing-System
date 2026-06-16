@@ -9,6 +9,15 @@ from typing import Any, List
 from backend.database.connection import AsyncSessionLocal
 from backend.database.models import ClaimModel, TraceSpanModel, ClaimDecisionModel, GatingErrorModel, MemberModel, PolicyModel, LLMMetricModel
 from backend.ai_platform.metrics import normalize_agent_name
+from backend.api.test_suite_utils import (
+    TEST_SUITE_ROOT,
+    content_type_for,
+    find_assignment_test_case,
+    load_assignment_test_cases,
+    none_or_str,
+    suite_documents_for,
+    suite_manifest_for,
+)
 from backend.services.document_preprocessor import prepare_for_vision_call
 from backend.storage.local import save_uploaded_document
 from backend.tasks.ingestion import run_claim_ingestion
@@ -57,6 +66,19 @@ async def list_policies_and_members(db: AsyncSession = Depends(get_db)):
             }
             for policy in policies_result.scalars().all()
         ]
+    }
+
+
+@router.get("/policy-options")
+async def get_policy_options():
+    from backend.policy.loader import get_policy
+
+    policy = get_policy()
+    return {
+        "network_hospitals": policy.network_hospitals,
+        "minimum_claim_amount": policy.submission_rules.minimum_claim_amount,
+        "per_claim_limit": policy.coverage.per_claim_limit,
+        "claim_categories": list(policy.document_requirements.keys()),
     }
 
 
@@ -146,6 +168,8 @@ async def submit_claim(
     claim_category: str = Form(...),
     treatment_date: str = Form(...),
     claimed_amount: str = Form(...),
+    ytd_claims_amount: str | None = Form(None),
+    hospital_name: str | None = Form(None),
     documents: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db)
 ):
@@ -191,7 +215,7 @@ async def submit_claim(
         treatment_date=treatment_date,
         submission_date=now_iso,
         claimed_amount=claimed_amount,
-        hospital_name=None,
+        hospital_name=hospital_name or None,
         status="PROCESSING",
         current_stage="vision_read_doc_1",
         trace_id=f"trace-{claim_id}",
@@ -208,6 +232,8 @@ async def submit_claim(
         claim_category=claim_category,
         treatment_date=treatment_date,
         claimed_amount=claimed_amount,
+        ytd_claims_amount=ytd_claims_amount,
+        hospital_name=hospital_name,
         documents=document_payloads,
     )
     
@@ -215,6 +241,125 @@ async def submit_claim(
         "claim_id": claim_id,
         "status": "PROCESSING",
         "trace_id": new_claim.trace_id
+    }
+
+
+@router.get("/test-suite")
+async def list_test_suite_cases():
+    cases = []
+    for test_case in load_assignment_test_cases():
+        case_id = test_case["case_id"]
+        expected = test_case.get("expected", {})
+        manifest = suite_manifest_for(case_id) or {}
+        documents = []
+        documents_dir = TEST_SUITE_ROOT / case_id / "documents"
+        if documents_dir.exists():
+            documents = [str(path.relative_to(TEST_SUITE_ROOT / case_id)).replace("\\", "/") for path in sorted(documents_dir.iterdir()) if path.is_file()]
+        cases.append(
+            {
+                "case_id": case_id,
+                "case_name": test_case.get("case_name"),
+                "description": test_case.get("description"),
+                "member_id": test_case.get("input", {}).get("member_id"),
+                "claim_category": test_case.get("input", {}).get("claim_category"),
+                "claimed_amount": test_case.get("input", {}).get("claimed_amount"),
+                "expected_decision": expected.get("decision"),
+                "expected_approved_amount": expected.get("approved_amount"),
+                "documents": documents,
+                "test_context": manifest.get("test_context", {}),
+                "api_mode_note": "Runs through the normal upload ingestion path using test_suite document artifacts.",
+            }
+        )
+    return {"cases": cases}
+
+
+@router.post("/test-suite/{case_id}/run")
+async def run_test_suite_case(
+    case_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    test_case = find_assignment_test_case(case_id)
+    case_id = test_case["case_id"]
+    case_input = test_case["input"]
+    member_id = case_input["member_id"]
+    policy_id = case_input.get("policy_id") or "PLUM_GHI_2024"
+
+    member = await db.get(MemberModel, member_id)
+    policy = await db.get(PolicyModel, policy_id)
+    if not member:
+        raise HTTPException(status_code=400, detail=f"Unknown member_id in {case_id}: {member_id}")
+    if not policy:
+        raise HTTPException(status_code=500, detail=f"Policy {policy_id} is not seeded")
+
+    claim_id = f"CLM-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{case_id}-{uuid.uuid4().hex[:4].upper()}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    document_payloads: list[dict[str, Any]] = []
+
+    for upload_index, document_path in enumerate(suite_documents_for(case_id), start=1):
+        raw_bytes = document_path.read_bytes()
+        content_type = content_type_for(document_path)
+        saved_path = save_uploaded_document(
+            claim_id=claim_id,
+            file_name=document_path.name,
+            content=raw_bytes,
+            index=upload_index,
+        )
+        page_images = prepare_for_vision_call(str(saved_path), content_type)
+        for page_index, image_bytes in enumerate(page_images, start=1):
+            document_payloads.append(
+                {
+                    "file_name": document_path.name,
+                    "content_type": "image/png" if content_type == "application/pdf" else content_type,
+                    "raw_bytes": image_bytes,
+                    "size_bytes": len(image_bytes),
+                    "stored_path": str(saved_path),
+                    "source_page_range": str(page_index),
+                    "source_upload_index": upload_index,
+                    "suite_case_id": case_id,
+                }
+            )
+
+    new_claim = ClaimModel(
+        claim_id=claim_id,
+        member_id=member_id,
+        policy_id=policy_id,
+        claim_category=case_input["claim_category"],
+        treatment_date=case_input["treatment_date"],
+        submission_date=now_iso,
+        claimed_amount=str(case_input["claimed_amount"]),
+        hospital_name=none_or_str(case_input.get("hospital_name")),
+        status="PROCESSING",
+        current_stage="vision_read_doc_1",
+        trace_id=f"trace-{claim_id}",
+        created_at=now_iso,
+        updated_at=now_iso,
+    )
+    db.add(new_claim)
+    await db.commit()
+
+    same_day_claim_count = len(case_input.get("claims_history", []))
+    background_tasks.add_task(
+        run_claim_ingestion,
+        claim_id,
+        member_id=member_id,
+        claim_category=case_input["claim_category"],
+        treatment_date=case_input["treatment_date"],
+        claimed_amount=str(case_input["claimed_amount"]),
+        ytd_claims_amount=none_or_str(case_input.get("ytd_claims_amount")),
+        hospital_name=none_or_str(case_input.get("hospital_name")),
+        same_day_claim_count=same_day_claim_count,
+        documents=document_payloads,
+    )
+
+    return {
+        "case_id": case_id,
+        "claim_id": claim_id,
+        "status": "PROCESSING",
+        "trace_id": new_claim.trace_id,
+        "expected": test_case.get("expected", {}),
+        "same_day_claim_count": same_day_claim_count,
+        "simulation_note": suite_manifest_for(case_id).get("test_context") if suite_manifest_for(case_id) else None,
     }
 
 @router.get("/")
@@ -352,6 +497,9 @@ async def get_claim_status(claim_id: str, db: AsyncSession = Depends(get_db)):
         
     return {
         "claim_id": claim.claim_id,
+        "claimed_amount": claim.claimed_amount,
+        "claim_category": claim.claim_category,
+        "member_id": claim.member_id,
         "status": claim.status,
         "current_stage": claim.current_stage,
         "updated_at": claim.updated_at,

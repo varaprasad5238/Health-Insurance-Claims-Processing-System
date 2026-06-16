@@ -95,6 +95,9 @@ async def run_claim_ingestion(
     treatment_date: str,
     claimed_amount: str,
     documents: list[dict[str, Any]],
+    ytd_claims_amount: str | None = None,
+    hospital_name: str | None = None,
+    same_day_claim_count: int = 0,
 ) -> None:
     logger.info("Starting claim ingestion: claim_id=%s member_id=%s category=%s documents=%s", claim_id, member_id, claim_category, len(documents))
 
@@ -175,6 +178,8 @@ async def run_claim_ingestion(
             reconciliation=reconciliation,
             failed_agents=[],
         )
+        if hospital_name and not merged_claim.hospital_name:
+            merged_claim = merged_claim.model_copy(update={"hospital_name": hospital_name})
     except Exception:
         logger.exception("Orchestration failed; routing claim to manual review: claim_id=%s", claim_id)
         await TraceStore.update_claim_state(claim_id, status="MANUAL_REVIEW", current_stage=None)
@@ -198,6 +203,8 @@ async def run_claim_ingestion(
             claim_category=claim_category,
             treatment_date=treatment_date,
             merged_claim=merged_claim,
+            ytd_claims_amount=ytd_claims_amount,
+            same_day_claim_count=same_day_claim_count,
         )
     except Exception:
         logger.exception("Policy evaluation failed; routing claim to manual review: claim_id=%s", claim_id)

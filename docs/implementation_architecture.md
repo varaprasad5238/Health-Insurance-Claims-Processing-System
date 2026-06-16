@@ -411,5 +411,3 @@ At higher scale:
 - Supported multi-logical-document uploads by returning `documents: [...]` from the vision contract.
 
 ---
-
-*End of Document*

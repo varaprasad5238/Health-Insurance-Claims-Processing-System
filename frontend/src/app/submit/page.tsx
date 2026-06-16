@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Activity, ArrowLeft, FileUp, Loader2, ShieldCheck, X } from "lucide-react";
@@ -7,7 +7,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const MIN_CLAIM_AMOUNT = 500;
-const MAX_CLAIM_AMOUNT = 5000;
+const MAX_CLAIM_AMOUNT = 50000;
 const MAX_DOCUMENTS = 4;
 const MAX_FILE_SIZE_MB = 3;
 const MAX_TOTAL_UPLOAD_SIZE_MB = 8;
@@ -39,43 +39,79 @@ export default function SubmitClaim() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [networkHospitals, setNetworkHospitals] = useState<string[]>([]);
+  const [fileMessage, setFileMessage] = useState<string>("");
+
+  useEffect(() => {
+    const loadPolicyOptions = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/claims/policy-options`);
+        if (!response.ok) return;
+        const payload = await response.json();
+        setNetworkHospitals(payload.network_hospitals ?? []);
+      } catch {
+        setNetworkHospitals([]);
+      }
+    };
+    loadPolicyOptions();
+  }, []);
 
   const addFiles = (files: FileList | null) => {
     if (!files) {
       return;
     }
-    setSelectedFiles((currentFiles) => {
-      const nextFiles = [...currentFiles];
-      for (const file of Array.from(files)) {
-        if (file.size > MAX_FILE_SIZE_MB * BYTES_PER_MB) {
-          alert(`${file.name} is too large. Maximum file size is ${MAX_FILE_SIZE_MB} MB.`);
-          continue;
-        }
-        if (nextFiles.length >= MAX_DOCUMENTS) {
-          alert(`You can upload a maximum of ${MAX_DOCUMENTS} documents per claim.`);
-          break;
-        }
-        const alreadySelected = nextFiles.some(
-          (existingFile) =>
-            existingFile.name === file.name &&
-            existingFile.size === file.size &&
-            existingFile.lastModified === file.lastModified,
-        );
-        if (!alreadySelected) {
-          const nextTotalSize = nextFiles.reduce((total, selectedFile) => total + selectedFile.size, 0) + file.size;
-          if (nextTotalSize > MAX_TOTAL_UPLOAD_SIZE_MB * BYTES_PER_MB) {
-            alert(`Total upload size cannot exceed ${MAX_TOTAL_UPLOAD_SIZE_MB} MB.`);
-            break;
-          }
-          nextFiles.push(file);
-        }
+
+    const nextFiles = [...selectedFiles];
+    const messages: string[] = [];
+    let addedCount = 0;
+
+    for (const file of Array.from(files)) {
+      if (file.size > MAX_FILE_SIZE_MB * BYTES_PER_MB) {
+        messages.push(`${file.name} was skipped because it is ${formatFileSize(file.size)}. Max per file is ${MAX_FILE_SIZE_MB} MB.`);
+        continue;
       }
-      return nextFiles;
-    });
+
+      if (nextFiles.length >= MAX_DOCUMENTS) {
+        messages.push(`Only ${MAX_DOCUMENTS} files can be uploaded per claim.`);
+        break;
+      }
+
+      const alreadySelected = nextFiles.some(
+        (existingFile) =>
+          existingFile.name === file.name &&
+          existingFile.size === file.size &&
+          existingFile.lastModified === file.lastModified,
+      );
+
+      if (alreadySelected) {
+        messages.push(`${file.name} is already selected.`);
+        continue;
+      }
+
+      const nextTotalSize = nextFiles.reduce((total, selectedFile) => total + selectedFile.size, 0) + file.size;
+      if (nextTotalSize > MAX_TOTAL_UPLOAD_SIZE_MB * BYTES_PER_MB) {
+        messages.push(`Total upload size would exceed ${MAX_TOTAL_UPLOAD_SIZE_MB} MB. ${file.name} was not added.`);
+        break;
+      }
+
+      nextFiles.push(file);
+      addedCount += 1;
+    }
+
+    if (addedCount > 0) {
+      messages.unshift(`${addedCount} file${addedCount === 1 ? "" : "s"} added.`);
+    }
+    if (messages.length === 0) {
+      messages.push("No new files were added. Please choose PDF, PNG, JPG, JPEG, WEBP, or GIF files within the size limits.");
+    }
+
+    setSelectedFiles(nextFiles);
+    setFileMessage(messages.join(" "));
   };
 
   const removeFile = (fileToRemove: File) => {
     setSelectedFiles((currentFiles) => currentFiles.filter((file) => file !== fileToRemove));
+    setFileMessage(`${fileToRemove.name} removed.`);
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -186,6 +222,23 @@ export default function SubmitClaim() {
                 <input type="number" min={MIN_CLAIM_AMOUNT} max={MAX_CLAIM_AMOUNT} step="0.01" name="claimed_amount" required placeholder="1500.00" className="input-surface" />
                 <span className="block text-xs text-muted">Allowed range: ₹{MIN_CLAIM_AMOUNT} to ₹{MAX_CLAIM_AMOUNT}</span>
               </label>
+
+              <label className="space-y-2">
+                <span className="text-sm font-bold">YTD Claims Amount</span>
+                <input type="number" min="0" step="0.01" name="ytd_claims_amount" placeholder="Optional" className="input-surface" />
+                <span className="block text-xs text-muted">Optional current-year claimed amount</span>
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-sm font-bold">Hospital</span>
+                <select name="hospital_name" className="input-surface" defaultValue="">
+                  <option value="">Not selected / non-network</option>
+                  {networkHospitals.map((hospital) => (
+                    <option key={hospital} value={hospital}>{hospital}</option>
+                  ))}
+                </select>
+                <span className="block text-xs text-muted">Optional network hospital selection</span>
+              </label>
             </div>
 
             <label className="mt-4 block space-y-2">
@@ -209,6 +262,14 @@ export default function SubmitClaim() {
                 <p className="mt-3 text-xs text-muted">
                   You can select multiple files at once or add them one by one. Maximum {MAX_DOCUMENTS} files, {MAX_FILE_SIZE_MB} MB per file, {MAX_TOTAL_UPLOAD_SIZE_MB} MB total. A single PDF can contain all claim documents.
                 </p>
+                {fileMessage && (
+                  <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-xs font-bold text-muted">
+                    {fileMessage}
+                  </div>
+                )}
+                <div className="mt-3 text-xs text-muted">
+                  Current total: {formatFileSize(selectedFiles.reduce((total, file) => total + file.size, 0))} / {MAX_TOTAL_UPLOAD_SIZE_MB} MB
+                </div>
                 {selectedFiles.length > 0 && (
                   <div className="mt-4 space-y-2">
                     <div className="text-xs font-black uppercase tracking-[0.18em] text-muted">
@@ -264,4 +325,11 @@ export default function SubmitClaim() {
       </div>
     </main>
   );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes >= BYTES_PER_MB) {
+    return `${(bytes / BYTES_PER_MB).toFixed(2)} MB`;
+  }
+  return `${Math.max(bytes / 1024, 1).toFixed(1)} KB`;
 }

@@ -1,0 +1,8 @@
+{
+  "case_id": "TC009",
+  "metadata_source": "../../assignment/test_cases.json",
+  "documents": ["documents/TC009.pdf"],
+  "test_context": {
+    "same_day_claim_count_source": "input.claims_history"
+  }
+}
