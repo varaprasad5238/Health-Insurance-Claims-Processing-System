@@ -3,8 +3,8 @@ import inspect
 import threading
 from functools import wraps
 from typing import Any, Optional
-from .store import TraceStore
-from .span import TraceStatus, stage_order_for_agent
+from backend.tracing.store import TraceStore
+from backend.tracing.span import TraceStatus, stage_order_for_agent
 from pydantic import BaseModel
 
 def summarize_arg(arg: Any) -> Any:

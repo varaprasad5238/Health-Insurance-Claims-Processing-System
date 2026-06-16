@@ -201,7 +201,7 @@ class GeminiLLMClient(BaseLLMClient):
         raw_text = response.text or ""
         latency_ms = int((time.perf_counter() - started) * 1000)
         input_tokens, output_tokens, total_tokens = extract_gemini_usage(response)
-        if total_tokens == 0:
+        if getattr(response, "usage_metadata", None) is None:
             input_tokens = estimate_tokens(prompt, context=context, image_bytes=image_bytes)
             output_tokens = estimate_text_tokens(raw_text)
             total_tokens = input_tokens + output_tokens
@@ -303,54 +303,7 @@ class LLMPlatform:
             raise ProviderUnavailable(f"Unsupported LLM provider: {provider}")
         self._clients[provider] = client
         return client
-
-    async def generate_json(
-        self,
-        *,
-        prompt: str,
-        response_model: type[T],
-        model: str | None = None,
-        image_bytes: bytes | None = None,
-        mime_type: str | None = None,
-        context: dict[str, Any] | None = None,
-        claim_id: str | None = None,
-        agent_name: str | None = None,
-    ) -> T:
-        result = await self.get_llm_response(
-            prompt=prompt,
-            model=model,
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            context=context,
-            claim_id=claim_id,
-            agent_name=agent_name,
-        )
-        return parse_model_json(result.raw_text or "", response_model)
-
-    async def generate_json_result(
-        self,
-        *,
-        prompt: str,
-        response_model: type[T],
-        model: str | None = None,
-        image_bytes: bytes | None = None,
-        mime_type: str | None = None,
-        context: dict[str, Any] | None = None,
-        claim_id: str | None = None,
-        agent_name: str | None = None,
-    ) -> LLMResult:
-        result = await self.get_llm_response(
-            prompt=prompt,
-            model=model,
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            context=context,
-            claim_id=claim_id,
-            agent_name=agent_name,
-        )
-        result.raw_text = parse_model_json(result.raw_text or "", response_model).model_dump_json()
-        return result
-
+    
     async def get_llm_response(
         self,
         *,
@@ -513,6 +466,8 @@ def extract_gemini_usage(response) -> tuple[int, int, int]:
     input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
     output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
     total_tokens = int(getattr(usage, "total_token_count", input_tokens + output_tokens) or 0)
+    if total_tokens == 0 and (input_tokens or output_tokens):
+        total_tokens = input_tokens + output_tokens
     return input_tokens, output_tokens, total_tokens
 
 
